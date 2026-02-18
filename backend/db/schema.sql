@@ -1,0 +1,1 @@
+-- Claude generates schema here

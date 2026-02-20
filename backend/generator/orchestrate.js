@@ -1,4 +1,5 @@
 const { generateApp } = require('./generate');
+const { execSync } = require('child_process');
 const path = require('path');
 
 async function orchestrate(businessContext) {
@@ -11,7 +12,15 @@ async function orchestrate(businessContext) {
     const results = await generateApp(businessContext, outputDir);
     steps.push({ step: 'generating', status: 'complete', files: results.length });
 
-    // Step 2 — Code is written to container
+    // Step 2 — Rebuild frontend
+    steps.push({ step: 'rebuilding', status: 'in_progress' });
+    execSync('npm run build --prefix frontend', {
+      cwd: outputDir,
+      stdio: 'inherit'
+    });
+    steps.push({ step: 'rebuilding', status: 'complete' });
+
+    // Step 3 — Done
     steps.push({ step: 'deploying', status: 'complete' });
 
     return { success: true, steps };

@@ -22,7 +22,7 @@ async function runBuild(businessContext) {
     });
 
     // Clear Node's require cache for generated routes so they reload
-    const routesPath = require.resolve('../../routes/index');
+    const routesPath = require.resolve('../routes/index');
     delete require.cache[routesPath];
 
     buildStatus = { status: 'complete', files: results.length, completedAt: new Date().toISOString() };

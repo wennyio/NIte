@@ -2,33 +2,36 @@ const { generateApp } = require('./generate');
 const { execSync } = require('child_process');
 const path = require('path');
 
-async function orchestrate(businessContext) {
-  const steps = [];
+let buildStatus = { status: 'idle' };
 
+async function orchestrate(businessContext) {
+  buildStatus = { status: 'generating', startedAt: new Date().toISOString() };
+
+  // Run in background — don't await
+  runBuild(businessContext);
+
+  return { success: true, message: 'Build started. Check /admin/build-status for progress.' };
+}
+
+async function runBuild(businessContext) {
   try {
-    // Step 1 — Generate code
-    steps.push({ step: 'generating', status: 'in_progress' });
     const outputDir = path.join(__dirname, '../../');
     const results = await generateApp(businessContext, outputDir);
-    steps.push({ step: 'generating', status: 'complete', files: results.length });
+    buildStatus = { status: 'rebuilding', files: results.length };
 
-    // Step 2 — Rebuild frontend
-    steps.push({ step: 'rebuilding', status: 'in_progress' });
     execSync('npm run build --prefix frontend', {
       cwd: outputDir,
       stdio: 'inherit'
     });
-    steps.push({ step: 'rebuilding', status: 'complete' });
 
-    // Step 3 — Done
-    steps.push({ step: 'deploying', status: 'complete' });
-
-    return { success: true, steps };
-
+    buildStatus = { status: 'complete', files: results.length, completedAt: new Date().toISOString() };
   } catch (error) {
-    steps.push({ step: 'error', message: error.message });
-    return { success: false, steps, error: error.message };
+    buildStatus = { status: 'error', error: error.message };
   }
 }
 
-module.exports = { orchestrate };
+function getBuildStatus() {
+  return buildStatus;
+}
+
+module.exports = { orchestrate, getBuildStatus };

@@ -9,8 +9,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.get('/health', checkHealth);
-const adminRoutes = require('./routes/admin');
-app.use('/admin', adminRoutes);
+app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
+try {
+  const adminRoutes = require('./routes/admin');
+  app.use('/admin', adminRoutes);
+  console.log('Admin routes loaded');
+} catch (err) {
+  console.error('Failed to load admin routes:', err.message);
+}
 app.use('/dashboard', checkBilling);
 app.use('/api', checkBilling);
 const routes = require('./routes/index');

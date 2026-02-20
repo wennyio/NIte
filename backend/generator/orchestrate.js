@@ -6,10 +6,7 @@ let buildStatus = { status: 'idle' };
 
 async function orchestrate(businessContext) {
   buildStatus = { status: 'generating', startedAt: new Date().toISOString() };
-
-  // Run in background — don't await
   runBuild(businessContext);
-
   return { success: true, message: 'Build started. Check /admin/build-status for progress.' };
 }
 
@@ -24,7 +21,13 @@ async function runBuild(businessContext) {
       stdio: 'inherit'
     });
 
-    buildStatus = { status: 'complete', files: results.length, completedAt: new Date().toISOString() };
+    buildStatus = { status: 'restarting', files: results.length };
+
+    // Restart the server so it loads the new generated files
+    setTimeout(() => {
+      process.exit(0);
+    }, 1000);
+
   } catch (error) {
     buildStatus = { status: 'error', error: error.message };
   }

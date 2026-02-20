@@ -24,7 +24,7 @@ async function generateApp(businessContext, outputDir) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 8000,
+      max_tokens: 16000,
       messages: [
         { role: 'user', content: prompt }
       ]
@@ -43,11 +43,9 @@ async function generateApp(businessContext, outputDir) {
 
   console.log('Generation complete. Parsing...');
 
-  // Parse
   const files = parseGeneratedOutput(rawOutput);
   console.log(`Parsed ${files.length} files`);
 
-  // Validate
   const errors = validateFiles(files);
   if (errors.length > 0) {
     console.error('Validation failed:');
@@ -56,7 +54,6 @@ async function generateApp(businessContext, outputDir) {
   }
   console.log('Validation passed ✓');
 
-  // Write
   const results = writeFiles(files, outputDir);
   results.forEach(r => console.log(`  ${r.status}: ${r.path}`));
 

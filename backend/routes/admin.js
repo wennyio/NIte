@@ -1,32 +1,20 @@
 const express = require('express');
 const router = express.Router();
-const { orchestrate } = require('../generator/orchestrate');
+const { orchestrate, getBuildStatus } = require('../generator/orchestrate');
 
 router.post('/generate', async (req, res) => {
   try {
     const { businessContext } = req.body;
-
     if (!businessContext || !businessContext.business_type || !businessContext.business_name) {
       return res.status(400).json({ error: 'Missing business context' });
     }
-
-    console.log(`Generating app for: ${businessContext.business_name}`);
-
     const result = await orchestrate(businessContext);
-
-    if (result.success) {
-      res.json({ message: 'App generated successfully', steps: result.steps });
-    } else {
-      res.status(500).json({ error: result.error, steps: result.steps });
-    }
-
+    res.json(result);
   } catch (err) {
-    console.error('Generation failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Test route — triggers a salon generation
 router.get('/test-generate', async (req, res) => {
   const testContext = {
     business_type: 'salon',
@@ -44,12 +32,15 @@ router.get('/test-generate', async (req, res) => {
   };
 
   try {
-    console.log('Test generation starting...');
     const result = await orchestrate(testContext);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get('/build-status', (req, res) => {
+  res.json(getBuildStatus());
 });
 
 module.exports = router;

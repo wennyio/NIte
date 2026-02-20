@@ -13,6 +13,8 @@ app.use('/dashboard', checkBilling);
 app.use('/api', checkBilling);
 const routes = require('./routes/index');
 app.use('/api', routes);
+const adminRoutes = require('./routes/admin');
+app.use('/admin', adminRoutes);
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/dist/index.html')));
 const PORT = process.env.PORT || 3000;

@@ -21,14 +21,15 @@ async function runBuild(businessContext) {
       stdio: 'inherit'
     });
 
-    buildStatus = { status: 'restarting', files: results.length };
+    // Clear Node's require cache for generated routes so they reload
+    const routesPath = require.resolve('../../routes/index');
+    delete require.cache[routesPath];
 
-    // Restart the server so it loads the new generated files
-    setTimeout(() => {
-      process.exit(0);
-    }, 1000);
+    buildStatus = { status: 'complete', files: results.length, completedAt: new Date().toISOString() };
+    console.log('Build complete — app is live');
 
   } catch (error) {
+    console.error('Build error:', error.message);
     buildStatus = { status: 'error', error: error.message };
   }
 }

@@ -21,12 +21,11 @@ async function runBuild(businessContext) {
       stdio: 'inherit'
     });
 
-    // Clear Node's require cache for generated routes so they reload
-    const routesPath = require.resolve('../routes/index');
-    delete require.cache[routesPath];
+    buildStatus = { status: 'restarting', files: results.length };
 
-    buildStatus = { status: 'complete', files: results.length, completedAt: new Date().toISOString() };
-    console.log('Build complete — app is live');
+    // Exit so Railway restarts the container WITHOUT rebuilding from GitHub
+    // Railway restart policy will bring it back with the new files still on disk
+    process.exit(0);
 
   } catch (error) {
     console.error('Build error:', error.message);

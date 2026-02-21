@@ -4,11 +4,11 @@ const { orchestrate, getBuildStatus } = require('../generator/orchestrate');
 
 router.post('/generate', async (req, res) => {
   try {
-    const { businessContext } = req.body;
+    const { businessContext, customerId } = req.body;
     if (!businessContext || !businessContext.business_type || !businessContext.business_name) {
       return res.status(400).json({ error: 'Missing business context' });
     }
-    const result = await orchestrate(businessContext);
+    const result = await orchestrate(businessContext, customerId || null);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -30,9 +30,8 @@ router.get('/test-generate', async (req, res) => {
     public_features: ['booking page', 'service menu', 'contact info'],
     dashboard_features: ['appointment management', 'client profiles', 'revenue dashboard', 'staff management']
   };
-
   try {
-    const result = await orchestrate(testContext);
+    const result = await orchestrate(testContext, null);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

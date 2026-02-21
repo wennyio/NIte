@@ -1,13 +1,33 @@
 const express = require('express');
 const router = express.Router();
-const { verifyToken } = require('../modules/auth');
+const { verifyToken, generateToken } = require('../modules/auth');
 const { createClient } = require('@supabase/supabase-js');
-
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
+// AUTH - Login
+router.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const { data, error } = await supabase
+      .from('staff')
+      .select('*')
+      .eq('email', email)
+      .single();
+    if (error || !data) return res.status(401).json({ error: 'Invalid credentials' });
+    const { data: valid } = await supabase
+      .rpc('verify_password', { password, hash: data.password_hash });
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    const token = generateToken({ id: data.id, name: data.name, role: data.role });
+    res.json({ token, user: { id: data.id, name: data.name, role: data.role } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SERVICES - Public
 router.get('/services', async (req, res) => {
   try {
     const { data, error } = await supabase.from('services').select('*').eq('is_active', true).order('price', { ascending: true });
@@ -18,6 +38,7 @@ router.get('/services', async (req, res) => {
   }
 });
 
+// STAFF - Public
 router.get('/staff/public', async (req, res) => {
   try {
     const { data, error } = await supabase.from('staff').select('id, name, role').eq('is_active', true);
@@ -28,6 +49,7 @@ router.get('/staff/public', async (req, res) => {
   }
 });
 
+// BOOK - Public
 router.post('/book', async (req, res) => {
   try {
     const { client_name, client_email, client_phone, staff_id, service_id, appointment_date, appointment_time, notes } = req.body;
@@ -56,6 +78,7 @@ router.post('/book', async (req, res) => {
   }
 });
 
+// DASHBOARD - Appointments
 router.get('/dashboard/appointments', verifyToken, async (req, res) => {
   try {
     const { date, status } = req.query;
@@ -80,6 +103,7 @@ router.patch('/dashboard/appointments/:id', verifyToken, async (req, res) => {
   }
 });
 
+// DASHBOARD - Clients
 router.get('/dashboard/clients', verifyToken, async (req, res) => {
   try {
     const { search } = req.query;
@@ -105,6 +129,7 @@ router.get('/dashboard/clients/:id', verifyToken, async (req, res) => {
   }
 });
 
+// DASHBOARD - Staff
 router.get('/dashboard/staff', verifyToken, async (req, res) => {
   try {
     const { data, error } = await supabase.from('staff').select('*').order('name');
@@ -125,6 +150,7 @@ router.post('/dashboard/staff', verifyToken, async (req, res) => {
   }
 });
 
+// DASHBOARD - Revenue
 router.get('/dashboard/revenue', verifyToken, async (req, res) => {
   try {
     const { start_date, end_date } = req.query;

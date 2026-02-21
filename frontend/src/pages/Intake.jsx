@@ -143,7 +143,7 @@ export default function Intake() {
           addMessage('nite', "Build failed. Our team has been notified. Please try again.");
         }
 
-        if (attempts > 60) {
+        if (attempts > 120) {
           clearInterval(interval);
           setPhase('error');
           addMessage('nite', "This is taking longer than expected. Please refresh and try again.");

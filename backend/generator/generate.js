@@ -1,15 +1,20 @@
 const fs = require('fs');
 const path = require('path');
-const { parseGeneratedOutput, validateFiles, writeFiles } = require('./parser');
+const { parseGeneratedOutput, validateFiles } = require('./parser');
+const { createClient } = require('@supabase/supabase-js');
 
 const SYSTEM_PROMPT = fs.readFileSync(
   path.join(__dirname, 'system-prompt.txt'),
   'utf8'
 );
 
-async function generateApp(businessContext, outputDir) {
-  console.log('Starting generation...');
+async function generateApp(businessContext, customerId) {
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_KEY
+  );
 
+  console.log('Starting generation...');
   const prompt = SYSTEM_PROMPT.replace(
     '{{BUSINESS_CONTEXT}}',
     JSON.stringify(businessContext, null, 2)
@@ -32,7 +37,6 @@ async function generateApp(businessContext, outputDir) {
   });
 
   const data = await response.json();
-
   if (data.error) {
     throw new Error(`Claude API error: ${data.error.message}`);
   }
@@ -42,7 +46,6 @@ async function generateApp(businessContext, outputDir) {
     .join('\n');
 
   console.log('Generation complete. Parsing...');
-
   const files = parseGeneratedOutput(rawOutput);
   console.log(`Parsed ${files.length} files`);
 
@@ -52,13 +55,34 @@ async function generateApp(businessContext, outputDir) {
     errors.forEach(e => console.error(`  ✗ ${e}`));
     throw new Error('Generated code failed validation');
   }
+
   console.log('Validation passed ✓');
 
-  const results = writeFiles(files, outputDir);
-  results.forEach(r => console.log(`  ${r.status}: ${r.path}`));
+  // Delete old generated files for this customer
+  if (customerId) {
+    await supabase
+      .from('generated_apps')
+      .delete()
+      .eq('customer_id', customerId);
+  }
 
-  console.log('Generation complete ✓');
-  return results;
+  // Save each file to Supabase
+  const rows = files.map(f => ({
+    customer_id: customerId || null,
+    file_path: f.path,
+    file_content: f.content
+  }));
+
+  const { error: insertError } = await supabase
+    .from('generated_apps')
+    .insert(rows);
+
+  if (insertError) {
+    throw new Error(`Failed to save generated files: ${insertError.message}`);
+  }
+
+  console.log(`Saved ${files.length} files to Supabase ✓`);
+  return files;
 }
 
 module.exports = { generateApp };

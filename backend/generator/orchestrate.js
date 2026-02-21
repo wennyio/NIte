@@ -21,11 +21,7 @@ async function runBuild(businessContext) {
       stdio: 'inherit'
     });
 
-    buildStatus = { status: 'restarting', files: results.length };
-
-    // Exit so Railway restarts the container WITHOUT rebuilding from GitHub
-    // Railway restart policy will bring it back with the new files still on disk
-    process.exit(0);
+buildStatus = { status: 'complete', files: results.length };
 
   } catch (error) {
     console.error('Build error:', error.message);

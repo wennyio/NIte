@@ -1,28 +1,18 @@
 const { generateApp } = require('./generate');
-const { execSync } = require('child_process');
-const path = require('path');
 
 let buildStatus = { status: 'idle' };
 
-async function orchestrate(businessContext) {
+async function orchestrate(businessContext, customerId) {
   buildStatus = { status: 'generating', startedAt: new Date().toISOString() };
-  runBuild(businessContext);
+  runBuild(businessContext, customerId);
   return { success: true, message: 'Build started. Check /admin/build-status for progress.' };
 }
 
-async function runBuild(businessContext) {
+async function runBuild(businessContext, customerId) {
   try {
-    const outputDir = path.join(__dirname, '../../');
-    const results = await generateApp(businessContext, outputDir);
-    buildStatus = { status: 'rebuilding', files: results.length };
-
-    execSync('npm run build --prefix frontend', {
-      cwd: outputDir,
-      stdio: 'inherit'
-    });
-
-buildStatus = { status: 'complete', files: results.length };
-
+    const files = await generateApp(businessContext, customerId);
+    buildStatus = { status: 'complete', files: files.length, completedAt: new Date().toISOString() };
+    console.log(`Build complete: ${files.length} files saved to Supabase`);
   } catch (error) {
     console.error('Build error:', error.message);
     buildStatus = { status: 'error', error: error.message };

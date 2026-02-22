@@ -31,6 +31,13 @@ app.use('/api', (req, res, next) => {
   routes(req, res, next);
 });
 
+// Nite platform routes — served from nite-dist (never overwritten)
+app.use('/start', express.static(path.join(__dirname, '../frontend/nite-dist')));
+app.use('/admin', express.static(path.join(__dirname, '../frontend/nite-dist')));
+app.get('/start*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
+app.get('/admin*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
+
+// Generated app — served from dist
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));

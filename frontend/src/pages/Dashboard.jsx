@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';import axios from 'axios';
+import { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
 
 const TOKEN_KEY = 'nite_token';
 
@@ -46,13 +47,13 @@ export default function Dashboard() {
         if (dateFilter) params.date = dateFilter;
         if (statusFilter) params.status = statusFilter;
         const r = await api('/api/dashboard/appointments', { params });
-        setAppointments(r.data);
+        setAppointments(Array.isArray(r.data) ? r.data : []);
       } else if (t === 'clients') {
         const r = await api('/api/dashboard/clients', { params: clientSearch ? { search: clientSearch } : {} });
-        setClients(r.data);
+        setClients(Array.isArray(r.data) ? r.data : []);
       } else if (t === 'staff') {
         const r = await api('/api/dashboard/staff');
-        setStaff(r.data);
+        setStaff(Array.isArray(r.data) ? r.data : []);
       } else if (t === 'revenue') {
         const r = await api('/api/dashboard/revenue');
         setRevenue(r.data);
@@ -250,8 +251,8 @@ export default function Dashboard() {
                 <table>
                   <thead><tr><th>Date</th><th>Service</th><th>Stylist</th><th>Amount</th></tr></thead>
                   <tbody>
-                    {revenue.appointments?.length === 0 && <tr><td colSpan={4} style={{ color: '#444', fontStyle: 'italic' }}>No completed appointments</td></tr>}
-                    {revenue.appointments?.map((a, i) => (
+                    {(Array.isArray(revenue.appointments) ? revenue.appointments : []).length === 0 && <tr><td colSpan={4} style={{ color: '#444', fontStyle: 'italic' }}>No completed appointments</td></tr>}
+                    {(Array.isArray(revenue.appointments) ? revenue.appointments : []).map((a, i) => (
                       <tr key={i}>
                         <td className="mono" style={{ fontSize: '12px' }}>{a.appointment_date}</td>
                         <td>{a.services?.name}</td>

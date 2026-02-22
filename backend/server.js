@@ -21,6 +21,8 @@ app.get('/health', checkHealth);
 app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
 const adminRoutes = require('./routes/admin');
 app.use('/admin', adminRoutes);
+const agentRoutes = require('./routes/agent');
+app.use('/api/agent', agentRoutes);
 
 // Dynamic API routes
 app.use('/api', (req, res, next) => {

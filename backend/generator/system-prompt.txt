@@ -361,6 +361,8 @@ GUARD RAILS:
 - NEVER generate /api/auth/* routes
 - NEVER use inline onclick strings
 - NEVER use class-based React components
+- NEVER use < or > characters inside JSX text content — always use &lt; and &gt; HTML entities
+- NEVER initialize Supabase at the top level of routes/index.js — always initialize inside each route handler or wrap in a function
 - ALWAYS use functional components with hooks
 
 ---

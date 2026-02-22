@@ -16,19 +16,17 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-app.get('/health', checkHealth);
-app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
+// Nite platform — serve assets from nite-dist
+app.use(express.static(path.join(__dirname, '../frontend/nite-dist')));
 
-const adminRoutes = require('./routes/admin');
-app.use('/admin', adminRoutes);
+// Nite routes
+app.get('/start*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
+app.get('/admin*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
 
-// Dynamic API routes — clears Node cache on every request
-// This ensures the latest routes/index.js is always used after generation
-app.use('/api', (req, res, next) => {
-  const routesPath = path.join(__dirname, 'routes/index.js');
-  delete require.cache[require.resolve(routesPath)];
-  const routes = require(routesPath);
-  routes(req, res, next);
+// Generated app — served from dist
+app.use(express.static(path.join(__dirname, '../frontend/dist')));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
 });
 
 // Nite platform routes — served from nite-dist (never overwritten)

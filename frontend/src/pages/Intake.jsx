@@ -145,16 +145,20 @@ export default function Intake() {
             setPhase('done');
             addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
           }, 3000);
+        } else if (status === 'complete') {
+          clearInterval(interval);
+          setPhase('done');
+          addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
         } else if (status === 'error') {
           clearInterval(interval);
           setPhase('error');
           addMessage('nite', "Build failed. Our team has been notified. Please try again.");
         }
 
-        if (attempts > 120) {
+        if (attempts > 200) {
           clearInterval(interval);
           setPhase('error');
-          addMessage('nite', "This is taking longer than expected. Please refresh and try again.");
+          addMessage('nite', "Your app is taking a bit longer than expected. Visit the home page in a few minutes to see it live.");
         }
       } catch { }
     }, 3000);

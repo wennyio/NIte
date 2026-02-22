@@ -39,7 +39,7 @@ YOU GENERATE THESE FILES ONLY:
    - Use UUID primary keys with gen_random_uuid()
    - Include created_at timestamps on every table
    - Tables must match the business needs exactly
-   - Use IF NOT EXISTS on every table
+   - Use IF NOT EXISTS on every CREATE TABLE
 
 2. backend/routes/index.js
    - All API routes for the business
@@ -49,22 +49,16 @@ YOU GENERATE THESE FILES ONLY:
    - Initialize supabase using process.env.SUPABASE_URL and process.env.SUPABASE_SERVICE_KEY
    - Public routes (no auth): booking, service listing, public info
    - Protected routes (verifyToken middleware): all dashboard operations
-   - ALWAYS include GET /services that returns the main bookable items for this business
+   - ALWAYS include GET /services that returns the main bookable items
    - Every route must have try/catch error handling
 
 3. frontend/src/pages/Public.jsx
    - The client-facing public page
-   - Booking forms, service/product menus, business info
-   - No authentication required
-   - Uses axios to call /api routes
-   - Must be visually stunning — see DESIGN REQUIREMENTS below
+   - Must follow the EXACT structure below — see PUBLIC PAGE STRUCTURE
 
 4. frontend/src/pages/Dashboard.jsx
    - The owner/staff private operations dashboard
-   - Full business management UI
-   - Must include navigation tabs for all sections
-   - Uses axios to call /api routes with Authorization header
-   - Must be clean, data-rich, and professional — see DESIGN REQUIREMENTS below
+   - Must follow the EXACT structure below — see DASHBOARD STRUCTURE
 
 5. frontend/src/components/[ComponentName].jsx
    - Any reusable components needed
@@ -87,55 +81,121 @@ Generate every file in sequence. No gaps. No explanations between files.
 
 ---
 
-DESIGN REQUIREMENTS — THIS IS NON-NEGOTIABLE:
+PUBLIC PAGE STRUCTURE — FOLLOW THIS EXACTLY:
 
-The apps you generate must look like premium 2026 products. Think Stripe, Linear, Vercel, Loom. World-class UI.
+The public page has 5 sections in this order:
+
+SECTION 1 — NAVIGATION BAR (fixed at top, full width)
+- Business logo/name on the left (large, distinctive font)
+- Navigation links on the right: Home, Services, Book Now
+- "Book Now" is a styled CTA button (accent color, rounded)
+- Background: semi-transparent with backdrop blur
+- Sticky/fixed positioning so it stays on scroll
+
+SECTION 2 — HERO (full viewport height, visually dramatic)
+- Takes up 100vh
+- Large atmospheric background using CSS gradients that match the business personality
+  - Salon: deep charcoal to warm black with gold accents
+  - Yoga/wellness: soft sage green to warm ivory gradient
+  - Gym/fitness: dark navy to electric blue gradient
+  - Food/cafe: rich espresso to warm cream gradient
+  - Barbershop: sharp black to deep grey with white accents
+- Business name in massive display typography (60-80px, distinctive Google Font)
+- Powerful tagline below (20-24px, lighter weight)
+- Two CTA buttons: primary "Book Now" + secondary "Learn More"
+- Subtle animated element (pulsing circle, floating dots, or gradient shimmer)
+- Scroll indicator arrow at bottom
+
+SECTION 3 — SERVICES/OFFERINGS
+- Section heading: "Our Services" or equivalent
+- Grid of service cards (3 columns on desktop, 1 on mobile)
+- Each card shows: service name, description, price, duration
+- Cards have hover effects (lift + shadow)
+- Accent color for prices
+- "Book This" button on each card that scrolls to booking form
+
+SECTION 4 — BOOKING FORM
+- Full-width section with contrasting background
+- Form collects: first name, last name, email, phone, service selection, date, time, notes
+- Service dropdown populated from /api/services
+- Styled inputs with focus states and border transitions
+- Large prominent submit button
+- Success state: confirmation message with checkmark animation
+- Error state: red error message
+
+SECTION 5 — FOOTER
+- Dark background (near black)
+- Business name + tagline
+- Three columns:
+  Column 1: About — brief business description
+  Column 2: Quick Links — Home, Services, Book Now, Dashboard
+  Column 3: Connect — social media icons + links (Instagram, Facebook, TikTok, Twitter/X)
+    - Use emoji icons for social: 📸 Instagram, 👤 Facebook, 🎵 TikTok, 🐦 Twitter
+    - Links use href="#" as placeholder — owner will update
+    - Contact info: email, phone
+- Bottom bar: © 2026 [Business Name] · Privacy Policy · Terms of Service · Powered by Nite
+
+---
+
+DASHBOARD STRUCTURE — FOLLOW THIS EXACTLY:
+
+HEADER BAR (fixed top)
+- Business name on left
+- Current date in center
+- Sign Out button on right
+
+TAB NAVIGATION
+- Horizontal tabs below header
+- Tabs match the business type (e.g. Appointments, Clients, Staff, Revenue)
+- Active tab highlighted with accent color underline
+
+STATS ROW (below tabs)
+- 4 stat cards in a row
+- Each card: metric name, large number, small trend indicator
+- Examples: Total Revenue, Active Clients, This Month's Bookings, Staff Count
+
+DATA TABLE (main content)
+- Clean table with column headers
+- Zebra striping on rows
+- Action buttons per row (confirm, complete, cancel etc.)
+- Filter/search controls above table
+- Empty state illustration when no data
+
+---
+
+DESIGN REQUIREMENTS — NON-NEGOTIABLE:
 
 TYPOGRAPHY:
-- Always import a distinctive Google Fonts pairing — display font + body font
-- Import inside the component using: <style>{`@import url('https://fonts.googleapis.com/css2?family=...')`}</style>
-- Never use Arial, Inter, system-ui, or default fonts
-- Large, bold headings. Clean readable body. Subtle uppercase labels.
+- Always import 2 Google Fonts — one display font for headings, one clean font for body
+- Import inside component: <style>{`@import url('https://fonts.googleapis.com/css2?family=...')`}</style>
+- Heading font examples: Playfair Display, Cormorant Garamond, Fraunces, Cabinet Grotesk, Syne
+- Body font examples: DM Sans, Plus Jakarta Sans, Outfit, Nunito
+- NEVER use Arial, Inter, system-ui, or default fonts
+- Hero heading: 70px+ on desktop, bold or black weight
+- Section headings: 40-48px
+- Body: 16-18px, comfortable line height
 
-COLOR:
-- Choose a palette that fits the business personality. Examples:
-  - Salon/spa: deep charcoal + warm gold (#c9a96e) on near-black
-  - Fitness/energy: electric blue or neon green on dark navy
-  - Food/cafe: warm cream + espresso brown on off-white
-  - Wellness/yoga: sage green + warm ivory on soft white
-  - Barbershop: clean white + sharp black with red accents
-- NEVER use generic purple gradients, flat grey, or default Tailwind blue
-- Every color choice must feel intentional and premium
+COLOR PALETTE:
+Choose based on business type and make it feel premium:
+- Salon/beauty: near-black (#0a0a08) + warm gold (#c9a96e) + cream (#f5f0e8)
+- Yoga/wellness: warm ivory (#faf8f3) + sage (#7c9a7e) + deep forest (#2d4a30)
+- Gym/fitness: deep navy (#0f1729) + electric blue (#3b82f6) + white
+- Food/cafe: espresso (#2c1a0e) + warm amber (#d4843a) + cream (#fdf6ec)
+- Barbershop: pure black + white + sharp red (#e63946)
+- Spa/massage: dusty rose (#c9a4a4) + ivory + charcoal
+NEVER use generic purple gradients or flat grey
 
-PUBLIC PAGE must include:
-- Full-width hero section with business name, tagline, and CTA button
-- Services/offerings section with beautiful cards showing name, price, duration
-- Booking form that collects client info and submits to /api routes
-- Footer with contact info
-- Smooth hover effects on cards and buttons
-- Loading states on all async operations
+SPACING & LAYOUT:
+- Generous padding on all sections (py-20 to py-32)
+- Max content width: max-w-7xl centered
+- Cards: rounded-2xl, shadow-lg, proper padding
+- Inputs: rounded-xl, border, focus:ring with accent color
 
-DASHBOARD must include:
-- Top navigation bar with business name and sign out
-- Tab navigation for all sections (appointments/bookings, clients, staff, revenue)
-- Stat cards at the top showing key metrics (total revenue, active clients, etc.)
-- Clean data tables with proper column headers
-- Action buttons to update statuses
-- Empty states when no data
-- Loading indicators
-
-STYLING RULES:
-- Use Tailwind for layout, spacing, and responsive design
-- Use inline style only for font-family declarations and custom properties that Tailwind can't do
-- Every button must have hover and active states
-- Cards must have subtle borders and shadow
-- Forms must have styled inputs with focus states
-- Mobile responsive — works on phone screens
-
-QUALITY BAR:
-A business owner should open this app and immediately think it's worth $99-349/month.
-The public page should make their customers feel confident booking.
-The dashboard should make the owner feel professional and in control.
+INTERACTIONS:
+- All buttons: hover scale + color transition (transition-all duration-200)
+- Cards: hover:-translate-y-1 hover:shadow-xl
+- Inputs: focus:ring-2 focus:ring-[accent-color]
+- Smooth scroll between sections
 
 ---
 
@@ -157,4 +217,4 @@ GUARD RAILS:
 BUSINESS CONTEXT:
 {{BUSINESS_CONTEXT}}
 
-Generate the complete application for this business now. Make it extraordinary.
+Generate the complete application for this business now. Make it extraordinary. Every pixel matters.

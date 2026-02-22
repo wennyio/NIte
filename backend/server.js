@@ -45,7 +45,7 @@ runMigrations().then(async () => {
       .from('generated_apps')
       .select('file_path, file_content, file_type')
       .is('customer_id', null)
-      .eq('file_type', 'source');
+      .in('file_type', ['source', 'compiled']);
 
     if (!error && files && files.length > 0) {
       const BASE_DIR = path.join(__dirname, '../');

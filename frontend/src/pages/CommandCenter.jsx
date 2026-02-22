@@ -4,7 +4,7 @@ import axios from 'axios';
 const ADMIN_PASSWORD = 'nite-admin-2026';
 
 export default function CommandCenter() {
-  const [authed, setAuthed] = useState(sessionStorage.getItem('nite_admin') === 'true');
+  const [authed, setAuthed] = useState(false);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [customers, setCustomers] = useState([]);

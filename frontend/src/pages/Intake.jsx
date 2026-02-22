@@ -5,6 +5,7 @@ const QUESTIONS = [
   { key: 'business_name', question: "What's your business name?", placeholder: "e.g. Luxe Studio, Bark & Bath, FitZone..." },
   { key: 'business_type', question: "What kind of business is it?", placeholder: "e.g. salon, dog groomer, gym, barbershop..." },
   { key: 'owner_name', question: "What's your name?", placeholder: "Your first name" },
+  { key: 'owner_email', question: "What's your email address?", placeholder: "you@yourbusiness.com" },
   { key: 'services_raw', question: "What services do you offer? List them with prices if you know them.", placeholder: "e.g. Haircut $45, Color $120, Blowout $35" },
   { key: 'staff_raw', question: "How many staff do you have, and what are their roles?", placeholder: "e.g. Just me, or: 1 owner + 2 stylists" },
   { key: 'needs_raw', question: "What do you need to run your business? What's painful right now?", placeholder: "e.g. booking appointments, tracking clients, seeing revenue..." },

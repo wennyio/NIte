@@ -43,7 +43,6 @@ export default function Intake() {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    // Opening message
     setTimeout(() => {
       addMessage('nite', "Hey! I'm Nite. I'll build you a complete web app for your business in about 2 minutes. Just answer a few quick questions.");
       setTimeout(() => {
@@ -81,7 +80,6 @@ export default function Intake() {
         setCurrentQ(next);
       }, 500);
     } else {
-      // All questions answered — show summary
       setTimeout(() => showSummary(newAnswers), 600);
     }
   };
@@ -93,41 +91,9 @@ export default function Intake() {
     addMessage('nite', summary);
   };
 
-const handleGenerate = async () => {
-  setPhase('generating');
-  addMessage('nite', "Building your app now... This takes about 60-90 seconds. Hang tight! 🔨");
-
-  const services = parseServices(answers.services_raw);
-  const staff = parseStaff(answers.staff_raw);
-
-  const businessContext = {
-    business_name: answers.business_name,
-    business_type: answers.business_type.toLowerCase(),
-    owner_name: answers.owner_name,
-    owner_email: answers.owner_email,
-    services,
-    staff,
-    needs: answers.needs_raw.split(',').map(s => s.trim()),
-    public_features: ['booking page', 'service menu', 'contact info'],
-    dashboard_features: ['appointment management', 'client profiles', 'revenue dashboard', 'staff management'],
-  };
-
-  try {
-    const customerRes = await axios.post('/admin/customers', {
-      business_name: answers.business_name,
-      business_type: answers.business_type.toLowerCase(),
-      owner_name: answers.owner_name,
-      owner_email: answers.owner_email,
-    });
-    const customerId = customerRes.data.id;
-
-    await axios.post('/admin/generate', { businessContext, customerId });
-    startPolling();
-  } catch (err) {
-    setPhase('error');
-    addMessage('nite', "Something went wrong starting the build. Please try again.");
-  }
-};
+  const handleGenerate = async () => {
+    setPhase('generating');
+    addMessage('nite', "Building your app now... This takes about 60-90 seconds. Hang tight! 🔨");
 
     const services = parseServices(answers.services_raw);
     const staff = parseStaff(answers.staff_raw);
@@ -136,6 +102,7 @@ const handleGenerate = async () => {
       business_name: answers.business_name,
       business_type: answers.business_type.toLowerCase(),
       owner_name: answers.owner_name,
+      owner_email: answers.owner_email,
       services,
       staff,
       needs: answers.needs_raw.split(',').map(s => s.trim()),
@@ -144,7 +111,15 @@ const handleGenerate = async () => {
     };
 
     try {
-      await axios.post('/admin/generate', { businessContext });
+      const customerRes = await axios.post('/admin/customers', {
+        business_name: answers.business_name,
+        business_type: answers.business_type.toLowerCase(),
+        owner_name: answers.owner_name,
+        owner_email: answers.owner_email,
+      });
+      const customerId = customerRes.data.id;
+
+      await axios.post('/admin/generate', { businessContext, customerId });
       startPolling();
     } catch (err) {
       setPhase('error');

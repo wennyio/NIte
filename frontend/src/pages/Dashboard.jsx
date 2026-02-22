@@ -3,6 +3,99 @@ import axios from 'axios';
 
 const TOKEN_KEY = 'nite_token';
 
+function AgentWidget() {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([{ from: 'agent', text: "Hi! I'm your site assistant. Ask me to change anything on your site — text, colors, images, services." }]);
+  const [input, setInput] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [thinking, setThinking] = useState(false);
+  const [history, setHistory] = useState([]);
+  const bottomRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, open]);
+
+  const sendMessage = async () => {
+    const val = input.trim();
+    if (!val || thinking) return;
+    setInput('');
+    const userMsg = { from: 'user', text: val + (imageUrl ? ' [Image attached]' : '') };
+    setMessages(prev => [...prev, userMsg]);
+    setThinking(true);
+    const newHistory = [...history, { role: 'user', content: val + (imageUrl ? `\n\nImage URL: ${imageUrl}` : '') }];
+    setHistory(newHistory);
+    setImageUrl('');
+    try {
+      const r = await axios.post('/api/agent/chat', { message: val, imageUrl: imageUrl || undefined, conversationHistory: newHistory.slice(-10) });
+      const agentMsg = { from: 'agent', text: r.data.reply, rebuilt: r.data.rebuilt, filesChanged: r.data.filesChanged };
+      setMessages(prev => [...prev, agentMsg]);
+      setHistory(prev => [...prev, { role: 'assistant', content: r.data.reply }]);
+    } catch {
+      setMessages(prev => [...prev, { from: 'agent', text: 'Something went wrong. Please try again.' }]);
+    }
+    setThinking(false);
+  };
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const r = await axios.post('/api/agent/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setImageUrl(r.data.url);
+      setMessages(prev => [...prev, { from: 'agent', text: 'Image uploaded! Now tell me where to use it.' }]);
+    } catch {
+      setMessages(prev => [...prev, { from: 'agent', text: 'Upload failed. Try again.' }]);
+    }
+    setUploading(false);
+  };
+
+  return (
+    <>
+      <button onClick={() => setOpen(!open)} style={{ position: 'fixed', bottom: '32px', right: '32px', zIndex: 1000, width: '56px', height: '56px', borderRadius: '50%', background: '#c9a96e', border: 'none', cursor: 'pointer', fontSize: '22px', boxShadow: '0 4px 24px rgba(0,0,0,0.4)', transition: 'transform 0.2s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.1)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
+        {open ? '✕' : '✦'}
+      </button>
+      {open && (
+        <div style={{ position: 'fixed', bottom: '104px', right: '32px', zIndex: 999, width: '380px', height: '520px', background: '#111110', border: '1px solid #1e1e1a', borderRadius: '16px', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.6)', overflow: 'hidden' }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid #1e1e1a', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#c9a96e' }} />
+            <div style={{ fontFamily: 'Montserrat,sans-serif', fontSize: '11px', letterSpacing: '2px', color: '#c9a96e' }}>SITE ASSISTANT</div>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {messages.map((msg, i) => (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.from === 'user' ? 'flex-end' : 'flex-start' }}>
+                <div style={{ maxWidth: '85%', padding: '10px 14px', borderRadius: msg.from === 'user' ? '12px 2px 12px 12px' : '2px 12px 12px 12px', background: msg.from === 'user' ? '#1a1a0e' : '#161614', border: `1px solid ${msg.from === 'user' ? '#2a2a18' : '#1e1e1a'}`, fontSize: '14px', lineHeight: '1.5', color: msg.from === 'user' ? '#c9a96e' : '#e8e0d4' }}>
+                  {msg.text}
+                  {msg.rebuilt && <div style={{ marginTop: '8px', fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#6ec9a9', letterSpacing: '1px' }}>✓ SITE UPDATED · {msg.filesChanged} file{msg.filesChanged !== 1 ? 's' : ''} changed</div>}
+                </div>
+              </div>
+            ))}
+            {thinking && <div style={{ padding: '10px 14px', borderRadius: '2px 12px 12px 12px', background: '#161614', border: '1px solid #1e1e1a', width: 'fit-content' }}><div style={{ display: 'flex', gap: '4px' }}>{[0, 1, 2].map(i => <div key={i} style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#c9a96e', opacity: 0.6 }} />)}</div></div>}
+            {imageUrl && <div style={{ fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#6ec9a9' }}>✓ IMAGE READY · Tell me where to place it</div>}
+            <div ref={bottomRef} />
+          </div>
+          <div style={{ padding: '12px 16px', borderTop: '1px solid #1e1e1a' }}>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendMessage()} placeholder="Ask me to change anything..." style={{ flex: 1, background: '#0a0a08', border: '1px solid #1e1e1a', color: '#e8e0d4', padding: '10px 14px', borderRadius: '8px', fontFamily: 'Montserrat,sans-serif', fontSize: '13px', outline: 'none' }} />
+              <button onClick={sendMessage} disabled={!input.trim() || thinking} style={{ background: '#c9a96e', border: 'none', color: '#0a0a08', width: '40px', height: '40px', borderRadius: '8px', cursor: 'pointer', fontSize: '16px', opacity: (!input.trim() || thinking) ? 0.4 : 1 }}>→</button>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUpload} style={{ display: 'none' }} />
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} style={{ background: 'transparent', border: '1px solid #1e1e1a', color: '#666', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'Montserrat,sans-serif', fontSize: '10px', letterSpacing: '1px' }}>
+                {uploading ? '↑ UPLOADING...' : '↑ UPLOAD IMAGE'}
+              </button>
+              {imageUrl && <div style={{ fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#6ec9a9' }}>✓ ready</div>}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function Dashboard() {
   const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || '');
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
@@ -267,6 +360,7 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+      <AgentWidget />
     </div>
   );
 }

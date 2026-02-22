@@ -16,15 +16,14 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// Health + admin API
 app.get('/health', checkHealth);
 app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
 const adminRoutes = require('./routes/admin');
 app.use('/admin', adminRoutes);
+
 const agentRoutes = require('./routes/agent');
 app.use('/api/agent', agentRoutes);
 
-// Dynamic API routes
 app.use('/api', (req, res, next) => {
   const routesPath = path.join(__dirname, 'routes/index.js');
   delete require.cache[require.resolve(routesPath)];
@@ -32,12 +31,13 @@ app.use('/api', (req, res, next) => {
   routes(req, res, next);
 });
 
-// Nite platform assets (root-level so hashed JS/CSS files resolve correctly)
+// Nite platform assets
 app.use(express.static(path.join(__dirname, '../frontend/nite-dist')));
 
 // Nite platform routes
 app.get('/start*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
 app.get('/admin*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
+app.get('/dashboard*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
 
 // Generated app
 app.use(express.static(path.join(__dirname, '../frontend/dist')));

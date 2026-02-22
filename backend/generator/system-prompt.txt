@@ -364,6 +364,11 @@ GUARD RAILS:
 - NEVER use < or > characters inside JSX text content — always use &lt; and &gt; HTML entities
 - NEVER initialize Supabase at the top level of routes/index.js — always initialize inside each route handler or wrap in a function
 - ALWAYS use functional components with hooks
+- Social links must use realistic placeholder URLs based on business name: 
+  Instagram: https://instagram.com/[businessname]
+  Facebook: https://facebook.com/[businessname]
+  TikTok: https://tiktok.com/@[businessname]
+  Twitter: https://twitter.com/[businessname]
 
 ---
 

@@ -16,26 +16,28 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// Nite platform — serve assets from nite-dist
-app.use(express.static(path.join(__dirname, '../frontend/nite-dist')));
+// Health + admin API
+app.get('/health', checkHealth);
+app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
+const adminRoutes = require('./routes/admin');
+app.use('/admin', adminRoutes);
 
-// Nite routes
-app.get('/start*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
-app.get('/admin*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
-
-// Generated app — served from dist
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+// Dynamic API routes
+app.use('/api', (req, res, next) => {
+  const routesPath = path.join(__dirname, 'routes/index.js');
+  delete require.cache[require.resolve(routesPath)];
+  const routes = require(routesPath);
+  routes(req, res, next);
 });
 
-// Nite platform routes — served from nite-dist (never overwritten)
-app.use('/start', express.static(path.join(__dirname, '../frontend/nite-dist')));
-app.use('/admin', express.static(path.join(__dirname, '../frontend/nite-dist')));
+// Nite platform assets (root-level so hashed JS/CSS files resolve correctly)
+app.use(express.static(path.join(__dirname, '../frontend/nite-dist')));
+
+// Nite platform routes
 app.get('/start*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
 app.get('/admin*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
 
-// Generated app — served from dist
+// Generated app
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
@@ -68,7 +70,6 @@ async function restoreFromSupabase() {
     }
 
     const BASE_DIR = path.join(__dirname, '../');
-
     for (const file of files) {
       if (LOCKED_FILES.includes(file.file_path)) continue;
       const fullPath = path.join(BASE_DIR, file.file_path);
@@ -84,9 +85,7 @@ async function restoreFromSupabase() {
 }
 
 const PORT = process.env.PORT || 3000;
-
 runMigrations().then(async () => {
-  // Restore BEFORE listening so routes are ready on first request
   await restoreFromSupabase();
   app.listen(PORT, () => console.log(`App running on port ${PORT}`));
 });

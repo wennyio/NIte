@@ -1,7 +1,28 @@
 const express = require('express');
 const router = express.Router();
+const { createClient } = require('@supabase/supabase-js');
 const { orchestrate, getBuildStatus } = require('../generator/orchestrate');
 
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
+
+// Get all customers for command center
+router.get('/customers', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Generate app from intake
 router.post('/generate', async (req, res) => {
   try {
     const { businessContext, customerId } = req.body;
@@ -15,31 +36,11 @@ router.post('/generate', async (req, res) => {
   }
 });
 
-router.get('/test-generate', async (req, res) => {
-  const testContext = {
-    business_type: 'salon',
-    business_name: 'Luxe Studio',
-    owner_name: 'Sarah',
-    staff: ['owner', '2 stylists'],
-    services: [
-      { name: 'Haircut', price: 45, duration: '30 min' },
-      { name: 'Color', price: 120, duration: '90 min' },
-      { name: 'Blowout', price: 35, duration: '20 min' }
-    ],
-    needs: ['appointments', 'client history', 'revenue tracking', 'staff schedules'],
-    public_features: ['booking page', 'service menu', 'contact info'],
-    dashboard_features: ['appointment management', 'client profiles', 'revenue dashboard', 'staff management']
-  };
-  try {
-    const result = await orchestrate(testContext, null);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// Build status
 router.get('/build-status', (req, res) => {
   res.json(getBuildStatus());
 });
+
+router.get('/ping', (req, res) => res.json({ ping: 'pong' }));
 
 module.exports = router;

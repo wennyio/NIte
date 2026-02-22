@@ -4,7 +4,6 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
-const { checkBilling } = require('./modules/billing');
 const { checkHealth } = require('./modules/health');
 const { runMigrations } = require('./db/migrate');
 
@@ -23,23 +22,34 @@ app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
 const adminRoutes = require('./routes/admin');
 app.use('/admin', adminRoutes);
 
-const routes = require('./routes/index');
-app.use('/api', routes);
+// Dynamic API routes — clears Node cache on every request
+// This ensures the latest routes/index.js is always used after generation
+app.use('/api', (req, res, next) => {
+  const routesPath = path.join(__dirname, 'routes/index.js');
+  delete require.cache[require.resolve(routesPath)];
+  const routes = require(routesPath);
+  routes(req, res, next);
+});
 
-// Serve static frontend from disk (the base Nite app)
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
-
-// For any non-API route, serve the React app
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
 });
 
-const PORT = process.env.PORT || 3000;
+const LOCKED_FILES = [
+  'backend/server.js',
+  'backend/modules/auth.js',
+  'backend/modules/billing.js',
+  'backend/modules/health.js',
+  'backend/db/migrate.js',
+  'frontend/src/main.jsx',
+  'frontend/vite.config.js',
+  'frontend/index.html',
+  'config/env.template',
+  'Dockerfile'
+];
 
-runMigrations().then(async () => {
-  app.listen(PORT, () => console.log(`App running on port ${PORT}`));
-
-  // On startup, restore the latest generated app from Supabase to disk
+async function restoreFromSupabase() {
   try {
     const { data: files, error } = await supabase
       .from('generated_apps')
@@ -47,31 +57,31 @@ runMigrations().then(async () => {
       .is('customer_id', null)
       .in('file_type', ['source', 'compiled']);
 
-    if (!error && files && files.length > 0) {
-      const BASE_DIR = path.join(__dirname, '../');
-      const LOCKED_FILES = [
-        'backend/server.js',
-        'backend/modules/auth.js',
-        'backend/modules/billing.js',
-        'backend/modules/health.js',
-        'backend/db/migrate.js',
-        'frontend/src/main.jsx',
-        'frontend/vite.config.js',
-        'frontend/index.html',
-        'config/env.template',
-        'Dockerfile'
-      ];
-
-      for (const file of files) {
-        if (LOCKED_FILES.includes(file.file_path)) continue;
-        const fullPath = path.join(BASE_DIR, file.file_path);
-        const dir = path.dirname(fullPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(fullPath, file.file_content, 'utf8');
-      }
-      console.log(`Restored ${files.length} generated source files from Supabase ✓`);
+    if (error || !files || files.length === 0) {
+      console.log('No generated files to restore from Supabase');
+      return;
     }
+
+    const BASE_DIR = path.join(__dirname, '../');
+
+    for (const file of files) {
+      if (LOCKED_FILES.includes(file.file_path)) continue;
+      const fullPath = path.join(BASE_DIR, file.file_path);
+      const dir = path.dirname(fullPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(fullPath, file.file_content, 'utf8');
+    }
+
+    console.log(`Restored ${files.length} files from Supabase ✓`);
   } catch (err) {
-    console.error('Failed to restore generated files:', err.message);
+    console.error('Failed to restore from Supabase:', err.message);
   }
+}
+
+const PORT = process.env.PORT || 3000;
+
+runMigrations().then(async () => {
+  // Restore BEFORE listening so routes are ready on first request
+  await restoreFromSupabase();
+  app.listen(PORT, () => console.log(`App running on port ${PORT}`));
 });

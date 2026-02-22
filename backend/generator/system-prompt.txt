@@ -366,6 +366,7 @@ GUARD RAILS:
 - ALWAYS use functional components with hooks
 - Always initialize list state as empty arrays: useState([]) never useState(null) or useState({})
 - Always guard every .map() call: use (Array.isArray(x) ? x : []).map(...)
+- Dashboard.jsx React import MUST always be: import { useState, useEffect, useRef } from 'react';
 - Social links must use realistic placeholder URLs based on business name: 
   Instagram: https://instagram.com/[businessname]
   Facebook: https://facebook.com/[businessname]

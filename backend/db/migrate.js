@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS business_profiles (
 CREATE INDEX IF NOT EXISTS business_profiles_customer_idx
   ON business_profiles (customer_id);
 
+CREATE TABLE IF NOT EXISTS admin_events (
+  id BIGSERIAL PRIMARY KEY,
+  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+  actor TEXT NOT NULL DEFAULT 'system',
+  event_type TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_events_created_idx
+  ON admin_events (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS admin_events_customer_created_idx
+  ON admin_events (customer_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS nite_schema_migrations (
   name TEXT PRIMARY KEY,
   checksum TEXT NOT NULL,

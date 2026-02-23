@@ -1,9 +1,14 @@
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
 const { orchestrate, getBuildStatus } = require('../generator/orchestrate');
 const { getSupabaseClient } = require('../modules/supabase');
 const { countAppFiles, getAppFilesForCustomer } = require('../modules/live-app');
 const { restoreCompiledFilesToDisk } = require('../modules/restore-generated');
+
+const ADMIN_PANEL_PASSWORD = process.env.ADMIN_PANEL_PASSWORD || 'nite-admin-2026';
+const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET || 'dev-admin-secret-change-me';
+const ADMIN_SESSION_TTL = process.env.ADMIN_SESSION_TTL || '12h';
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -12,6 +17,59 @@ function getSupabaseOr503(res) {
     return null;
   }
   return supabase;
+}
+
+function isMissingTableError(err) {
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    msg.includes('could not find the table') ||
+    msg.includes('relation') && msg.includes('does not exist')
+  );
+}
+
+function readBearerToken(headerValue) {
+  const raw = String(headerValue || '').trim();
+  if (!raw.toLowerCase().startsWith('bearer ')) return '';
+  return raw.slice(7).trim();
+}
+
+function generateAdminToken() {
+  return jwt.sign({ scope: 'admin_panel' }, ADMIN_JWT_SECRET, { expiresIn: ADMIN_SESSION_TTL });
+}
+
+function requireAdminAuth(req, res, next) {
+  try {
+    const token = readBearerToken(req.headers.authorization);
+    if (!token) return res.status(401).json({ error: 'Missing admin token' });
+    const payload = jwt.verify(token, ADMIN_JWT_SECRET);
+    if (!payload || payload.scope !== 'admin_panel') {
+      return res.status(403).json({ error: 'Invalid admin token scope' });
+    }
+    req.admin = payload;
+    return next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired admin token' });
+  }
+}
+
+async function logAdminEvent(supabase, { customerId = null, eventType, actor = 'system', payload = {}, message = '' }) {
+  if (!supabase || !eventType) return;
+  try {
+    const result = await supabase.from('admin_events').insert({
+      customer_id: customerId || null,
+      event_type: String(eventType).slice(0, 120),
+      actor: String(actor || 'system').slice(0, 120),
+      message: String(message || '').slice(0, 240),
+      payload: payload && typeof payload === 'object' ? payload : {}
+    });
+    if (result.error && !isMissingTableError(result.error)) {
+      console.warn('Failed to log admin event:', result.error.message);
+    }
+  } catch (err) {
+    if (!isMissingTableError(err)) {
+      console.warn('Failed to log admin event:', err.message);
+    }
+  }
 }
 
 function mapAppStatusToBuildStatus(appStatus) {
@@ -231,8 +289,27 @@ async function parsePromptWithClaude(prompt) {
   return JSON.parse(jsonMatch[0]);
 }
 
+router.post('/auth/login', (req, res) => {
+  const { password } = req.body || {};
+  if (String(password || '') !== ADMIN_PANEL_PASSWORD) {
+    return res.status(401).json({ error: 'Invalid admin password' });
+  }
+  return res.json({
+    token: generateAdminToken(),
+    scope: 'admin_panel',
+    expiresIn: ADMIN_SESSION_TTL
+  });
+});
+
+router.get('/auth/me', requireAdminAuth, (req, res) => {
+  res.json({
+    ok: true,
+    scope: req.admin?.scope || 'admin_panel'
+  });
+});
+
 // Get all customers
-router.get('/customers', async (req, res) => {
+router.get('/customers', requireAdminAuth, async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -247,7 +324,7 @@ router.get('/customers', async (req, res) => {
   }
 });
 
-router.patch('/customers/:id/routing', async (req, res) => {
+router.patch('/customers/:id/routing', requireAdminAuth, async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -270,6 +347,13 @@ router.patch('/customers/:id/routing', async (req, res) => {
       .select('*')
       .single();
     if (error) throw error;
+    await logAdminEvent(supabase, {
+      customerId: req.params.id,
+      eventType: 'routing_updated',
+      actor: 'admin_panel',
+      payload: { container_url: normalizedContainerUrl || null },
+      message: normalizedContainerUrl ? 'Updated container URL' : 'Cleared container URL'
+    });
     res.json({ success: true, customer: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -306,6 +390,17 @@ router.post('/customers', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    await logAdminEvent(supabase, {
+      customerId: data.id,
+      eventType: 'customer_created',
+      actor: 'intake',
+      payload: {
+        business_name: data.business_name,
+        business_type: data.business_type,
+        subdomain: data.subdomain
+      },
+      message: 'Created customer from intake'
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -363,6 +458,16 @@ router.post('/generate', async (req, res) => {
     }
 
     const result = await orchestrate(businessContext, customerId || null);
+    await logAdminEvent(supabase, {
+      customerId: customerId || null,
+      eventType: 'build_requested',
+      actor: 'intake',
+      payload: {
+        business_name: businessContext.business_name,
+        business_type: businessContext.business_type
+      },
+      message: 'Queued app generation'
+    });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -423,9 +528,121 @@ router.get('/build-status', async (req, res) => {
   }
 });
 
+router.get('/analytics', requireAdminAuth, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const { data: customerRows, error: customerError } = await supabase
+      .from('customers')
+      .select('id, status, tier, app_status, business_type, created_at');
+    if (customerError) throw customerError;
+    const customers = Array.isArray(customerRows) ? customerRows : [];
+
+    const byStatus = {};
+    const byTier = {};
+    const byAppStatus = {};
+    const byBusinessType = {};
+    const nowMs = Date.now();
+    let createdLast24h = 0;
+    let createdLast7d = 0;
+    let activeCustomers = 0;
+    let liveApps = 0;
+
+    for (const row of customers) {
+      const status = row.status || 'unknown';
+      const tier = row.tier || 'unknown';
+      const appStatus = row.app_status || 'unknown';
+      const businessType = row.business_type || 'unknown';
+      byStatus[status] = (byStatus[status] || 0) + 1;
+      byTier[tier] = (byTier[tier] || 0) + 1;
+      byAppStatus[appStatus] = (byAppStatus[appStatus] || 0) + 1;
+      byBusinessType[businessType] = (byBusinessType[businessType] || 0) + 1;
+      if (status === 'active') activeCustomers += 1;
+      if (appStatus === 'live') liveApps += 1;
+
+      const createdMs = Date.parse(row.created_at || '');
+      if (Number.isFinite(createdMs)) {
+        if (nowMs - createdMs <= 24 * 60 * 60 * 1000) createdLast24h += 1;
+        if (nowMs - createdMs <= 7 * 24 * 60 * 60 * 1000) createdLast7d += 1;
+      }
+    }
+
+    const generated = await supabase
+      .from('generated_apps')
+      .select('customer_id')
+      .eq('file_type', 'source')
+      .not('customer_id', 'is', null);
+    if (generated.error && !isMissingTableError(generated.error)) throw generated.error;
+    const generatedRows = Array.isArray(generated.data) ? generated.data : [];
+    const builtCustomerIds = new Set(generatedRows.map((row) => row.customer_id).filter(Boolean));
+    const generatedCustomers = builtCustomerIds.size;
+
+    const totalCustomers = customers.length;
+    const topBusinessTypes = Object.entries(byBusinessType)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, count]) => ({ name, count }));
+
+    const buildState = getBuildStatus();
+
+    return res.json({
+      totals: {
+        totalCustomers,
+        activeCustomers,
+        liveApps,
+        generatedCustomers,
+        generationCoveragePct: totalCustomers > 0 ? Math.round((generatedCustomers / totalCustomers) * 100) : 0,
+        createdLast24h,
+        createdLast7d
+      },
+      breakdowns: {
+        byStatus,
+        byTier,
+        byAppStatus,
+        topBusinessTypes
+      },
+      buildState: {
+        status: buildState?.status || 'idle',
+        queueDepth: Number(buildState?.queueDepth || 0),
+        activeCustomerId: buildState?.activeCustomerId || null
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/events', requireAdminAuth, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 200)) : 60;
+    const customerId = String(req.query.customerId || '').trim();
+
+    let query = supabase
+      .from('admin_events')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (customerId) query = query.eq('customer_id', customerId);
+
+    const { data, error } = await query;
+    if (error) {
+      if (isMissingTableError(error)) return res.json([]);
+      throw error;
+    }
+    return res.json(Array.isArray(data) ? data : []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/ping', (req, res) => res.json({ ping: 'pong' }));
 
-router.post('/set-live', async (req, res) => {
+router.post('/set-live', requireAdminAuth, async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -436,6 +653,16 @@ router.post('/set-live', async (req, res) => {
     }
 
     const promoted = await promoteCustomerSnapshotToLive(supabase, customerId);
+    await logAdminEvent(supabase, {
+      customerId,
+      eventType: 'customer_set_live',
+      actor: 'admin_panel',
+      payload: {
+        app_status: promoted.customer?.app_status || 'live',
+        restored_files: promoted.restored?.restoredCount || 0
+      },
+      message: 'Promoted customer snapshot to live'
+    });
     res.json({ success: true, customer: promoted.customer, restored: promoted.restored });
   } catch (err) {
     res.status(500).json({ error: err.message });

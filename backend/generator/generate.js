@@ -26,6 +26,32 @@ const LOCKED_FILES = [
   'Dockerfile'
 ];
 
+async function requestGeneration(prompt, validationErrors = [], attempt = 1) {
+  const retryNote = attempt > 1
+    ? `\n\nIMPORTANT RETRY ${attempt}: Your previous output failed validation. Fix every issue and return a complete valid app.\nValidation errors:\n- ${validationErrors.join('\n- ')}\nYou must output all required files in ===FILE: ... === format.`
+    : '';
+  const requestPrompt = `${prompt}${retryNote}`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.CLAUDE_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16000,
+      messages: [{ role: 'user', content: requestPrompt }]
+    })
+  });
+  const data = await response.json();
+  if (!response.ok || data?.error) {
+    throw new Error(`Claude API error: ${data?.error?.message || response.status}`);
+  }
+  return (Array.isArray(data.content) ? data.content : []).map((block) => block.text || '').join('\n');
+}
+
 async function generateApp(businessContext, customerId) {
   const supabase = createClient(
     process.env.SUPABASE_URL,
@@ -39,33 +65,36 @@ async function generateApp(businessContext, customerId) {
     JSON.stringify(businessContext, null, 2)
   );
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.CLAUDE_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
-      messages: [{ role: 'user', content: prompt }]
-    })
-  });
+  let files = [];
+  let validationErrors = [];
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const rawOutput = await requestGeneration(prompt, validationErrors, attempt);
+    console.log(`Generation attempt ${attempt} complete. Parsing...`);
 
-  const data = await response.json();
-  if (data.error) throw new Error(`Claude API error: ${data.error.message}`);
+    files = parseGeneratedOutput(rawOutput);
+    console.log(`Parsed ${files.length} files`);
 
-  const rawOutput = data.content.map(block => block.text || '').join('\n');
-  console.log('Generation complete. Parsing...');
+    if (!Array.isArray(files) || files.length === 0) {
+      validationErrors = ['No files were generated.'];
+      if (attempt < maxAttempts) {
+        console.error('No files generated; retrying...');
+        continue;
+      }
+      break;
+    }
 
-  const files = parseGeneratedOutput(rawOutput);
-  console.log(`Parsed ${files.length} files`);
+    validationErrors = validateFiles(files);
+    if (validationErrors.length === 0) break;
 
-  const errors = validateFiles(files);
-  if (errors.length > 0) {
-    errors.forEach(e => console.error(`  ✗ ${e}`));
-    throw new Error('Generated code failed validation');
+    validationErrors.forEach(e => console.error(`  ✗ ${e}`));
+    if (attempt < maxAttempts) {
+      console.error(`Validation failed on attempt ${attempt}; retrying...`);
+    }
+  }
+  if (validationErrors.length > 0) {
+    const summary = validationErrors.slice(0, 4).join('; ');
+    throw new Error(`Generated code failed validation after ${maxAttempts} attempts: ${summary}`);
   }
   console.log('Validation passed ✓');
 

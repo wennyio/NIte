@@ -104,7 +104,7 @@ function extractServicesFromPrompt(prompt) {
     const name = String(match[1] || '').trim().replace(/\s+/g, ' ');
     const price = Number(match[2]);
     if (!name || !Number.isFinite(price)) continue;
-    services.push({ name, price, duration: '60 min' });
+    services.push({ name, price });
     if (services.length >= 12) break;
   }
   return services;
@@ -119,6 +119,7 @@ function sanitizeBusinessContext(rawContext, originalPrompt) {
   const guessedType = guessBusinessTypeFromPrompt(prompt);
   const business_name = String(raw.business_name || baseNameFromPrompt || 'New Business').slice(0, 120).trim() || 'New Business';
   const business_type = String(raw.business_type || guessedType || 'service business').slice(0, 80).trim() || 'service business';
+  const isEcommerce = /ecommerce|e-commerce|retail|store|shop|product/i.test(`${business_type} ${prompt}`);
   const owner_name = String(raw.owner_name || 'Owner').slice(0, 80).trim() || 'Owner';
 
   const emailCandidate = String(raw.owner_email || '').trim();
@@ -132,18 +133,31 @@ function sanitizeBusinessContext(rawContext, originalPrompt) {
     .map((item) => {
       if (!item) return null;
       if (typeof item === 'string') {
-        return { name: item.trim(), duration: '60 min' };
+        const name = item.trim();
+        if (!name) return null;
+        return { name };
       }
       const name = String(item.name || '').trim();
       if (!name) return null;
-      const normalized = { name, duration: String(item.duration || '60 min').trim() || '60 min' };
+      const normalized = { name };
       const price = Number(item.price);
       if (Number.isFinite(price) && price >= 0) normalized.price = price;
+      const duration = String(item.duration || '').trim();
+      if (duration) normalized.duration = duration;
       return normalized;
     })
     .filter(Boolean)
     .slice(0, 12);
-  const services = normalizedServices.length > 0 ? normalizedServices : extractServicesFromPrompt(prompt);
+  let services = normalizedServices.length > 0 ? normalizedServices : extractServicesFromPrompt(prompt);
+  if (isEcommerce) {
+    services = services.map((item) => ({
+      name: item.name,
+      ...(Number.isFinite(Number(item.price)) ? { price: Number(item.price) } : {})
+    }));
+    if (services.length === 0) {
+      services = [{ name: 'Product Catalog' }];
+    }
+  }
 
   const staff = Array.isArray(raw.staff) && raw.staff.length > 0
     ? raw.staff.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 12)
@@ -153,12 +167,18 @@ function sanitizeBusinessContext(rawContext, originalPrompt) {
     ? raw.needs.map((n) => String(n || '').trim()).filter(Boolean).slice(0, 12)
     : [prompt].filter(Boolean);
 
+  const publicFeatureDefaults = isEcommerce
+    ? ['premium storefront', 'product catalog', 'featured products', 'newsletter capture', 'contact info']
+    : ['booking page', 'service menu', 'contact info'];
+  const dashboardFeatureDefaults = isEcommerce
+    ? ['product management', 'order management', 'customer insights', 'revenue dashboard']
+    : ['appointment management', 'client profiles', 'revenue dashboard', 'staff management'];
   const public_features = Array.isArray(raw.public_features) && raw.public_features.length > 0
     ? raw.public_features.map((f) => String(f || '').trim()).filter(Boolean).slice(0, 12)
-    : ['booking page', 'service menu', 'contact info'];
+    : publicFeatureDefaults;
   const dashboard_features = Array.isArray(raw.dashboard_features) && raw.dashboard_features.length > 0
     ? raw.dashboard_features.map((f) => String(f || '').trim()).filter(Boolean).slice(0, 12)
-    : ['appointment management', 'client profiles', 'revenue dashboard', 'staff management'];
+    : dashboardFeatureDefaults;
 
   return {
     business_name,

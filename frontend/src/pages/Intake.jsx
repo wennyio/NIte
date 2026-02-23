@@ -1,64 +1,35 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
-const QUESTIONS = [
-  { key: 'business_name', question: "What's your business name?", placeholder: "e.g. Luxe Studio, Bark & Bath, FitZone..." },
-  { key: 'business_type', question: "What kind of business is it?", placeholder: "e.g. salon, dog groomer, gym, barbershop..." },
-  { key: 'owner_name', question: "What's your name?", placeholder: "Your first name" },
-  { key: 'owner_email', question: "What's your email address?", placeholder: "you@yourbusiness.com" },
-  { key: 'services_raw', question: "What services do you offer? List them with prices if you know them.", placeholder: "e.g. Haircut $45, Color $120, Blowout $35" },
-  { key: 'staff_raw', question: "How many staff do you have, and what are their roles?", placeholder: "e.g. Just me, or: 1 owner + 2 stylists" },
-  { key: 'needs_raw', question: "What do you need to run your business? What's painful right now?", placeholder: "e.g. booking appointments, tracking clients, seeing revenue..." },
-];
+const PROMPT_EXAMPLE = `Build a premium website and dashboard for my business.
+Business: Toy4Fun
+Type: Kids toy ecommerce brand
+Need: beautiful public storefront, product highlights, newsletter capture, owner dashboard insights.
+Style: modern, playful, premium.`;
 
-function parseServices(raw) {
-  return raw.split(',').map(s => {
-    const match = s.match(/([^$\d]+)\$?(\d+)?/);
-    const name = match?.[1]?.trim() || s.trim();
-    const price = match?.[2] ? parseInt(match[2]) : null;
-    return price ? { name, price, duration: '30 min' } : { name, duration: '30 min' };
-  }).filter(s => s.name);
-}
-
-function parseStaff(raw) {
-  const lower = raw.toLowerCase();
-  if (lower.includes('just me') || lower.includes('only me') || lower.includes('solo')) return ['owner'];
-  const nums = raw.match(/\d+/g);
-  const staff = ['owner'];
-  if (nums) {
-    for (let i = 1; i < Math.min(parseInt(nums[0]) + 1, 6); i++) staff.push('staff');
-  }
-  return staff;
+function statusText(status) {
+  if (status === 'queued') return 'WAITING IN BUILD QUEUE...';
+  if (status === 'idle') return 'PREPARING BUILD...';
+  if (status === 'generating') return 'GENERATING CUSTOM CODE...';
+  if (status === 'rebuilding') return 'BUILDING FRONTEND...';
+  if (status === 'restarting') return 'LAUNCHING...';
+  if (status === 'complete' || status === 'live') return 'DONE';
+  if (status === 'error') return 'BUILD FAILED';
+  return 'GENERATING...';
 }
 
 export default function Intake() {
-  const [messages, setMessages] = useState([]);
-  const [currentQ, setCurrentQ] = useState(0);
-  const [answers, setAnswers] = useState({});
-  const [input, setInput] = useState('');
-  const [phase, setPhase] = useState('chat'); // chat | confirming | generating | done | error
+  const [phase, setPhase] = useState('draft'); // draft | analyzing | confirming | generating | done | error
+  const [prompt, setPrompt] = useState('');
+  const [preview, setPreview] = useState(null);
   const [buildStatus, setBuildStatus] = useState('');
+  const [logs, setLogs] = useState([]);
+  const [error, setError] = useState('');
   const [pollInterval, setPollInterval] = useState(null);
+  const [currentCustomerId, setCurrentCustomerId] = useState('');
+  const [businessName, setBusinessName] = useState('');
+  const [lastStatus, setLastStatus] = useState('');
   const bottomRef = useRef(null);
-  const inputRef = useRef(null);
-  const lastStatusRef = useRef('');
-
-  useEffect(() => {
-    setTimeout(() => {
-      addMessage('nite', "Hey! I'm Nite. I'll build you a complete web app for your business in about 2 minutes. Just answer a few quick questions.");
-      setTimeout(() => {
-        addMessage('nite', QUESTIONS[0].question);
-      }, 800);
-    }, 400);
-  }, []);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    if (phase === 'chat') inputRef.current?.focus();
-  }, [phase, currentQ]);
 
   useEffect(() => {
     return () => {
@@ -66,76 +37,41 @@ export default function Intake() {
     };
   }, [pollInterval]);
 
-  const addMessage = (from, text) => {
-    setMessages(prev => [...prev, { from, text, id: Date.now() + Math.random() }]);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs, phase]);
+
+  const addLog = (text) => {
+    setLogs((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, text }]);
   };
 
-  const handleSend = () => {
-    const val = input.trim();
-    if (!val || phase !== 'chat') return;
-    setInput('');
-
-    addMessage('user', val);
-    const key = QUESTIONS[currentQ].key;
-    const newAnswers = { ...answers, [key]: val };
-    setAnswers(newAnswers);
-
-    const next = currentQ + 1;
-    if (next < QUESTIONS.length) {
-      setTimeout(() => {
-        addMessage('nite', QUESTIONS[next].question);
-        setCurrentQ(next);
-      }, 500);
-    } else {
-      setTimeout(() => showSummary(newAnswers), 600);
+  const analyzePrompt = async () => {
+    const val = String(prompt || '').trim();
+    if (val.length < 20) {
+      setError('Please add more detail so I can build the right app.');
+      return;
     }
-  };
-
-  const showSummary = (ans) => {
-    setPhase('confirming');
-    const services = parseServices(ans.services_raw);
-    const summary = `Got it! Here's what I'll build for **${ans.business_name}**:\n\n• Public booking page with ${services.length} service${services.length !== 1 ? 's' : ''}\n• Client management\n• Staff dashboard\n• Revenue tracking\n\nReady to generate your app?`;
-    addMessage('nite', summary);
-  };
-
-  const handleGenerate = async () => {
-    setPhase('generating');
-    addMessage('nite', "Building your app now... This takes about 60-90 seconds. Hang tight! 🔨");
-
-    const services = parseServices(answers.services_raw);
-    const staff = parseStaff(answers.staff_raw);
-
-    const businessContext = {
-      business_name: answers.business_name,
-      business_type: answers.business_type.toLowerCase(),
-      owner_name: answers.owner_name,
-      owner_email: answers.owner_email,
-      services,
-      staff,
-      needs: answers.needs_raw.split(',').map(s => s.trim()),
-      public_features: ['booking page', 'service menu', 'contact info'],
-      dashboard_features: ['appointment management', 'client profiles', 'revenue dashboard', 'staff management'],
-    };
-
+    setError('');
+    setPhase('analyzing');
+    setPreview(null);
+    setLogs([]);
+    setLastStatus('');
     try {
-      const customerRes = await axios.post('/admin/customers', {
-        business_name: answers.business_name,
-        business_type: answers.business_type.toLowerCase(),
-        owner_name: answers.owner_name,
-        owner_email: answers.owner_email,
-      });
-      const customerId = customerRes.data.id;
-      lastStatusRef.current = '';
-
-      await axios.post('/admin/generate', { businessContext, customerId });
-      startPolling(customerId);
+      const r = await axios.post('/admin/intake-parse', { prompt: val });
+      const context = r?.data?.businessContext;
+      if (!context?.business_name || !context?.business_type) {
+        throw new Error('Failed to parse business context');
+      }
+      setPreview(context);
+      setBusinessName(context.business_name);
+      setPhase('confirming');
     } catch (err) {
-      setPhase('error');
-      addMessage('nite', "Something went wrong starting the build. Please try again.");
+      setPhase('draft');
+      setError(err?.response?.data?.error || 'Could not process your prompt. Please try again.');
     }
   };
 
-  const startPolling = (customerId) => {
+  const startPolling = (customerId, parsedBusinessName) => {
     let attempts = 0;
     let pollFailures = 0;
     const interval = setInterval(async () => {
@@ -145,181 +81,243 @@ export default function Intake() {
           params: customerId ? { customerId } : {}
         });
         pollFailures = 0;
-        const status = r.data.status;
+        const status = r?.data?.status;
         setBuildStatus(status);
 
-        if (status !== lastStatusRef.current) {
-          if (status === 'queued') {
-            addMessage('nite', "You're in queue. Another build is finishing first — yours starts automatically next.");
-          } else if (status === 'generating') {
-            addMessage('nite', "✓ Build started. Generating your custom code...");
-          } else if (status === 'idle') {
-            addMessage('nite', "Build request received. Preparing your generation job...");
-          } else if (status === 'rebuilding') {
-            addMessage('nite', "✓ Code generated. Building frontend...");
-          } else if (status === 'restarting') {
-            addMessage('nite', "✓ Frontend built. Launching your app...");
-          }
-          lastStatusRef.current = status;
+        if (status && status !== lastStatus) {
+          if (status === 'queued') addLog('You are in queue. Your build starts automatically.');
+          if (status === 'idle') addLog('Build request received. Preparing generation job...');
+          if (status === 'generating') addLog('Build started. Generating your custom app...');
+          if (status === 'rebuilding') addLog('Code generated. Building frontend assets...');
+          if (status === 'restarting') addLog('Frontend built. Launching your live app...');
+          if (status === 'complete' || status === 'live') addLog('Build complete. Your app is now live.');
+          setLastStatus(status);
         }
 
-        if (status === 'restarting') {
-          clearInterval(interval);
-          setTimeout(() => {
-            setPhase('done');
-            addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
-          }, 3000);
-        } else if (status === 'complete' || status === 'live') {
+        if (status === 'complete' || status === 'live') {
           clearInterval(interval);
           setPhase('done');
-          addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
-        } else if (status === 'error') {
+          return;
+        }
+        if (status === 'error') {
           clearInterval(interval);
           setPhase('error');
-          addMessage('nite', "Build failed. Our team has been notified. Please try again.");
+          setError('Build failed. Please retry with a clearer prompt.');
+          return;
         }
 
         if (attempts > 200) {
           try {
-            if (customerId) {
-              await axios.post('/admin/set-live', { customerId });
-              clearInterval(interval);
-              setPhase('done');
-              addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
-              return;
-            }
+            await axios.post('/admin/set-live', { customerId });
+            clearInterval(interval);
+            setBuildStatus('complete');
+            addLog('Recovered build state and promoted your app to live.');
+            setPhase('done');
+            return;
           } catch { }
           clearInterval(interval);
           setPhase('error');
-          addMessage('nite', "Your app is taking a bit longer than expected. Visit the home page in a few minutes to see it live.");
+          setError('Your app is taking a bit longer than expected. Visit the home page in a few minutes to see it live.');
+          return;
         }
       } catch {
         pollFailures++;
-        if (pollFailures === 5) {
-          addMessage('nite', "Still checking your build status... network seems slow, retrying.");
-        }
+        if (pollFailures === 5) addLog('Still checking your build status... network seems slow, retrying.');
       }
     }, 3000);
     setPollInterval(interval);
+    setBusinessName(parsedBusinessName || businessName);
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const buildFromPrompt = async () => {
+    if (!preview) return;
+    setError('');
+    setPhase('generating');
+    setLogs([]);
+    setLastStatus('');
+    addLog(`Creating owner profile for ${preview.business_name}...`);
+
+    try {
+      const customerRes = await axios.post('/admin/customers', {
+        business_name: preview.business_name,
+        business_type: preview.business_type,
+        owner_name: preview.owner_name,
+        owner_email: preview.owner_email
+      });
+      const customerId = customerRes?.data?.id;
+      if (!customerId) throw new Error('Customer creation failed');
+      setCurrentCustomerId(customerId);
+      addLog('Customer profile created. Queuing generation...');
+
+      await axios.post('/admin/generate', {
+        businessContext: preview,
+        customerId
+      });
+      addLog('Build queued. Tracking progress now...');
+      startPolling(customerId, preview.business_name);
+    } catch (err) {
+      setPhase('error');
+      setError(err?.response?.data?.error || 'Something went wrong starting your build.');
     }
   };
 
-  const progress = Math.round((currentQ / QUESTIONS.length) * 100);
-
   return (
-    <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', display: 'flex', flexDirection: 'column', color: '#e8e0d4' }}>
+    <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', color: '#e8e0d4' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=Montserrat:wght@300;400;500&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
         .mono { font-family: 'Montserrat', sans-serif; }
-        .msg-nite { background: #12120e; border: 1px solid #1e1e18; padding: 16px 20px; border-radius: 2px 16px 16px 16px; max-width: 480px; font-size: 17px; line-height: 1.6; }
-        .msg-user { background: #1a1a0e; border: 1px solid #2a2a18; padding: 16px 20px; border-radius: 16px 2px 16px 16px; max-width: 480px; font-size: 17px; line-height: 1.6; margin-left: auto; color: #c9a96e; }
-        .msg-wrap { display: flex; flex-direction: column; gap: 4px; animation: fadeUp 0.4s ease forwards; }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        textarea { background: transparent; border: none; outline: none; color: #e8e0d4; font-family: 'Cormorant Garamond', Georgia, serif; font-size: 18px; resize: none; width: 100%; line-height: 1.5; }
-        textarea::placeholder { color: #444; }
-        .send-btn { background: #c9a96e; border: none; color: #0a0a08; width: 44px; height: 44px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background 0.2s; font-size: 18px; }
-        .send-btn:hover { background: #e8c98a; }
-        .send-btn:disabled { background: #2a2a22; cursor: default; }
-        .confirm-btn { background: #c9a96e; color: #0a0a08; border: none; padding: 14px 40px; font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 500; letter-spacing: 3px; text-transform: uppercase; cursor: pointer; transition: background 0.2s; }
-        .confirm-btn:hover { background: #e8c98a; }
-        .progress-bar { height: 2px; background: #1a1a14; transition: width 0.5s ease; }
-        .progress-fill { height: 100%; background: #c9a96e; transition: width 0.5s ease; }
-        .pulse { animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        textarea, input {
+          width: 100%;
+          background: #12120e;
+          border: 1px solid #1e1e18;
+          color: #e8e0d4;
+          padding: 14px 16px;
+          font-family: 'Montserrat', sans-serif;
+          font-size: 13px;
+          outline: none;
+        }
+        textarea:focus, input:focus { border-color: #c9a96e; }
+        .btn {
+          background: #c9a96e;
+          color: #0a0a08;
+          border: none;
+          padding: 14px 24px;
+          font-family: 'Montserrat', sans-serif;
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 3px;
+          text-transform: uppercase;
+          cursor: pointer;
+        }
+        .btn:disabled { opacity: 0.5; cursor: default; }
+        .btn-ghost {
+          background: transparent;
+          color: #c9a96e;
+          border: 1px solid #c9a96e55;
+          padding: 12px 18px;
+          font-family: 'Montserrat', sans-serif;
+          font-size: 10px;
+          letter-spacing: 2px;
+          text-transform: uppercase;
+          cursor: pointer;
+        }
       `}</style>
 
-      {/* HEADER */}
-      <div style={{ padding: '20px 32px', borderBottom: '1px solid #1a1a14', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
+      <div style={{ maxWidth: '900px', margin: '0 auto', padding: '28px 24px 64px' }}>
+        <div style={{ marginBottom: '24px' }}>
           <div style={{ fontSize: '20px', fontWeight: 300, letterSpacing: '5px', textTransform: 'uppercase' }}>Nite</div>
           <div className="mono" style={{ fontSize: '9px', letterSpacing: '3px', color: '#c9a96e' }}>APP BUILDER</div>
         </div>
-        {phase === 'chat' && currentQ > 0 && (
-          <div style={{ textAlign: 'right' }}>
-            <div className="mono" style={{ fontSize: '9px', letterSpacing: '2px', color: '#555', marginBottom: '6px' }}>{currentQ} OF {QUESTIONS.length}</div>
-            <div style={{ width: '120px' }} className="progress-bar">
-              <div className="progress-fill" style={{ width: `${progress}%` }}></div>
+
+        {(phase === 'draft' || phase === 'analyzing' || phase === 'confirming' || phase === 'error') && (
+          <div style={{ border: '1px solid #1a1a14', padding: '18px' }}>
+            <div className="mono" style={{ fontSize: '10px', letterSpacing: '3px', color: '#c9a96e', marginBottom: '10px' }}>
+              DESCRIBE WHAT YOU WANT
+            </div>
+            <h1 style={{ fontSize: '38px', fontWeight: 300, marginBottom: '12px' }}>
+              Prompt-first onboarding
+            </h1>
+            <p className="mono" style={{ fontSize: '12px', color: '#777', lineHeight: 1.7, marginBottom: '14px' }}>
+              Tell Nite what business you run, the vibe you want, and what your app should do.
+              No rigid questionnaire. Just describe it naturally.
+            </p>
+            <textarea
+              rows={8}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={PROMPT_EXAMPLE}
+              disabled={phase === 'analyzing'}
+            />
+            {error && <div className="mono" style={{ fontSize: '12px', color: '#e07070', marginTop: '10px' }}>{error}</div>}
+            <div style={{ marginTop: '14px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button className="btn" onClick={analyzePrompt} disabled={phase === 'analyzing'}>
+                {phase === 'analyzing' ? 'Analyzing...' : 'Review Prompt →'}
+              </button>
+              {phase === 'confirming' && (
+                <>
+                  <button className="btn" onClick={buildFromPrompt}>Build My App →</button>
+                  <button className="btn-ghost" onClick={() => setPhase('draft')}>Edit Prompt</button>
+                </>
+              )}
             </div>
           </div>
         )}
-      </div>
 
-      {/* MESSAGES */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '720px', width: '100%', margin: '0 auto' }}>
-        {messages.map(msg => (
-          <div key={msg.id} className="msg-wrap">
-            {msg.from === 'nite' && (
-              <div className="mono" style={{ fontSize: '9px', letterSpacing: '2px', color: '#c9a96e', marginBottom: '4px' }}>NITE</div>
-            )}
-            <div className={msg.from === 'nite' ? 'msg-nite' : 'msg-user'}>
-              {msg.text.split('\n').map((line, i) => (
-                <div key={i} style={{ marginBottom: line === '' ? '8px' : '0' }}>
-                  {line.startsWith('•') ? (
-                    <div className="mono" style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>{line}</div>
-                  ) : line.includes('**') ? (
-                    <span dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong style="color:#c9a96e">$1</strong>') }} />
-                  ) : line}
+        {phase === 'confirming' && preview && (
+          <div style={{ marginTop: '16px', border: '1px solid #1a1a14', padding: '18px' }}>
+            <div className="mono" style={{ fontSize: '10px', letterSpacing: '3px', color: '#c9a96e', marginBottom: '8px' }}>BUILD PREVIEW</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px', marginBottom: '14px' }}>
+              <div style={{ border: '1px solid #1a1a14', padding: '10px' }}>
+                <div className="mono" style={{ fontSize: '9px', color: '#777', letterSpacing: '2px' }}>BUSINESS</div>
+                <div>{preview.business_name}</div>
+              </div>
+              <div style={{ border: '1px solid #1a1a14', padding: '10px' }}>
+                <div className="mono" style={{ fontSize: '9px', color: '#777', letterSpacing: '2px' }}>TYPE</div>
+                <div>{preview.business_type}</div>
+              </div>
+              <div style={{ border: '1px solid #1a1a14', padding: '10px' }}>
+                <div className="mono" style={{ fontSize: '9px', color: '#777', letterSpacing: '2px' }}>OWNER EMAIL</div>
+                <div>{preview.owner_email}</div>
+              </div>
+            </div>
+            <div className="mono" style={{ fontSize: '10px', color: '#c9a96e', marginBottom: '8px', letterSpacing: '2px' }}>
+              SERVICES ({Array.isArray(preview.services) ? preview.services.length : 0})
+            </div>
+            <div style={{ display: 'grid', gap: '8px' }}>
+              {(Array.isArray(preview.services) ? preview.services : []).slice(0, 8).map((s, idx) => (
+                <div key={idx} style={{ border: '1px solid #1a1a14', padding: '10px', display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                  <span>{s.name}</span>
+                  <span className="mono" style={{ color: '#c9a96e' }}>{s.price ? `$${s.price}` : s.duration || 'Service'}</span>
                 </div>
               ))}
+              {(Array.isArray(preview.services) ? preview.services : []).length === 0 && (
+                <div className="mono" style={{ fontSize: '12px', color: '#777' }}>No explicit services found; app will be generated from your prompt context.</div>
+              )}
             </div>
           </div>
-        ))}
-
-        {/* CONFIRM BUTTON */}
-        {phase === 'confirming' && (
-          <div style={{ animation: 'fadeUp 0.4s ease forwards', marginTop: '8px' }}>
-            <button className="confirm-btn" onClick={handleGenerate}>Build My App →</button>
-          </div>
         )}
 
-        {/* GENERATING STATUS */}
         {phase === 'generating' && (
-          <div className="mono pulse" style={{ fontSize: '11px', letterSpacing: '2px', color: '#c9a96e' }}>
-            {buildStatus === 'queued' ? '▸ WAITING IN BUILD QUEUE...' :
-             buildStatus === 'idle' ? '▸ PREPARING BUILD...' :
-             buildStatus === 'rebuilding' ? '▸ BUILDING FRONTEND...' :
-             buildStatus === 'restarting' ? '▸ LAUNCHING...' :
-             '▸ GENERATING CODE...'}
+          <div style={{ marginTop: '16px', border: '1px solid #1a1a14', padding: '18px' }}>
+            <div className="mono" style={{ fontSize: '10px', letterSpacing: '3px', color: '#c9a96e', marginBottom: '10px' }}>
+              GENERATING {businessName ? `· ${businessName.toUpperCase()}` : ''}
+            </div>
+            <div className="mono" style={{ fontSize: '12px', color: '#e8e0d4', marginBottom: '12px' }}>
+              ▸ {statusText(buildStatus)}
+            </div>
+            <div style={{ display: 'grid', gap: '8px' }}>
+              {logs.map((item) => (
+                <div key={item.id} className="mono" style={{ fontSize: '12px', color: '#888', border: '1px solid #1a1a14', padding: '8px 10px' }}>
+                  {item.text}
+                </div>
+              ))}
+              {logs.length === 0 && (
+                <div className="mono" style={{ fontSize: '12px', color: '#777' }}>Preparing build...</div>
+              )}
+            </div>
+            <div ref={bottomRef} />
           </div>
         )}
 
-        {/* DONE */}
         {phase === 'done' && (
-          <div style={{ animation: 'fadeUp 0.4s ease forwards' }}>
-            <a href="/" style={{ display: 'inline-block', background: '#c9a96e', color: '#0a0a08', padding: '14px 40px', fontFamily: 'Montserrat', fontSize: '11px', fontWeight: 500, letterSpacing: '3px', textTransform: 'uppercase', textDecoration: 'none' }}>
-              View Your App →
-            </a>
+          <div style={{ marginTop: '16px', border: '1px solid #1a1a14', padding: '20px' }}>
+            <div style={{ fontSize: '34px', fontWeight: 300, marginBottom: '10px' }}>Your app is live</div>
+            <p className="mono" style={{ fontSize: '12px', color: '#888', lineHeight: 1.8, marginBottom: '14px' }}>
+              Built for {businessName || 'your business'}. Open your site, then use the dashboard Site Assistant to iterate in plain language.
+            </p>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <a className="btn" href="/" style={{ textDecoration: 'none', display: 'inline-block' }}>View Site</a>
+              <a className="btn-ghost" href="/dashboard" style={{ textDecoration: 'none', display: 'inline-block' }}>Open Dashboard</a>
+              {currentCustomerId && (
+                <span className="mono" style={{ fontSize: '10px', color: '#666', alignSelf: 'center' }}>
+                  Customer ID: {currentCustomerId}
+                </span>
+              )}
+            </div>
           </div>
         )}
-
-        <div ref={bottomRef} />
       </div>
-
-      {/* INPUT */}
-      {phase === 'chat' && (
-        <div style={{ borderTop: '1px solid #1a1a14', padding: '20px 32px', maxWidth: '720px', width: '100%', margin: '0 auto' }}>
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', borderBottom: '1px solid #2a2a22', paddingBottom: '16px' }}>
-            <textarea
-              ref={inputRef}
-              rows={1}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={QUESTIONS[Math.min(currentQ, QUESTIONS.length - 1)]?.placeholder}
-              style={{ minHeight: '28px', maxHeight: '120px' }}
-            />
-            <button className="send-btn" onClick={handleSend} disabled={!input.trim()}>→</button>
-          </div>
-          <div className="mono" style={{ fontSize: '9px', letterSpacing: '2px', color: '#333', marginTop: '10px' }}>PRESS ENTER TO SEND</div>
-        </div>
-      )}
     </div>
   );
 }

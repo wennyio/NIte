@@ -41,6 +41,7 @@ export default function Intake() {
   const [pollInterval, setPollInterval] = useState(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const lastStatusRef = useRef('');
 
   useEffect(() => {
     setTimeout(() => {
@@ -58,6 +59,12 @@ export default function Intake() {
   useEffect(() => {
     if (phase === 'chat') inputRef.current?.focus();
   }, [phase, currentQ]);
+
+  useEffect(() => {
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [pollInterval]);
 
   const addMessage = (from, text) => {
     setMessages(prev => [...prev, { from, text, id: Date.now() + Math.random() }]);
@@ -118,34 +125,47 @@ export default function Intake() {
         owner_email: answers.owner_email,
       });
       const customerId = customerRes.data.id;
+      lastStatusRef.current = '';
 
       await axios.post('/admin/generate', { businessContext, customerId });
-      startPolling();
+      startPolling(customerId);
     } catch (err) {
       setPhase('error');
       addMessage('nite', "Something went wrong starting the build. Please try again.");
     }
   };
 
-  const startPolling = () => {
+  const startPolling = (customerId) => {
     let attempts = 0;
     const interval = setInterval(async () => {
       attempts++;
       try {
-        const r = await axios.get('/admin/build-status');
+        const r = await axios.get('/admin/build-status', {
+          params: customerId ? { customerId } : {}
+        });
         const status = r.data.status;
         setBuildStatus(status);
 
-        if (status === 'rebuilding') {
-          addMessage('nite', "✓ Code generated. Building frontend...");
-        } else if (status === 'restarting') {
-          addMessage('nite', "✓ Frontend built. Launching your app...");
+        if (status !== lastStatusRef.current) {
+          if (status === 'queued') {
+            addMessage('nite', "You're in queue. Another build is finishing first — yours starts automatically next.");
+          } else if (status === 'generating') {
+            addMessage('nite', "✓ Build started. Generating your custom code...");
+          } else if (status === 'rebuilding') {
+            addMessage('nite', "✓ Code generated. Building frontend...");
+          } else if (status === 'restarting') {
+            addMessage('nite', "✓ Frontend built. Launching your app...");
+          }
+          lastStatusRef.current = status;
+        }
+
+        if (status === 'restarting') {
           clearInterval(interval);
           setTimeout(() => {
             setPhase('done');
             addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
           }, 3000);
-        } else if (status === 'complete') {
+        } else if (status === 'complete' || status === 'live') {
           clearInterval(interval);
           setPhase('done');
           addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
@@ -244,7 +264,8 @@ export default function Intake() {
         {/* GENERATING STATUS */}
         {phase === 'generating' && (
           <div className="mono pulse" style={{ fontSize: '11px', letterSpacing: '2px', color: '#c9a96e' }}>
-            {buildStatus === 'rebuilding' ? '▸ BUILDING FRONTEND...' :
+            {buildStatus === 'queued' ? '▸ WAITING IN BUILD QUEUE...' :
+             buildStatus === 'rebuilding' ? '▸ BUILDING FRONTEND...' :
              buildStatus === 'restarting' ? '▸ LAUNCHING...' :
              '▸ GENERATING CODE...'}
           </div>

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
 const { createHash } = require('crypto');
+const dns = require('dns');
 
 const PLATFORM_SCHEMA_SQL = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -45,11 +46,21 @@ function checksum(content) {
   return createHash('sha256').update(content).digest('hex');
 }
 
+function isConnectivityError(err) {
+  const codes = new Set(['ENETUNREACH', 'EHOSTUNREACH', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN']);
+  return !!(err && (codes.has(err.code) || (typeof err.message === 'string' && err.message.includes('ENETUNREACH'))));
+}
+
 const runMigrations = async () => {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.log('DATABASE_URL not set. Skipping SQL migrations.');
     return;
+  }
+
+  // Prefer IPv4 first so platforms without IPv6 egress can still connect.
+  if (typeof dns.setDefaultResultOrder === 'function') {
+    dns.setDefaultResultOrder('ipv4first');
   }
 
   const schemaPath = path.join(__dirname, 'schema.sql');
@@ -97,6 +108,10 @@ const runMigrations = async () => {
     console.log('Migrations complete');
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch { }
+    if (isConnectivityError(err) && process.env.MIGRATIONS_STRICT !== 'true') {
+      console.error('Migration DB connectivity failed; continuing startup without SQL migration:', err.message);
+      return;
+    }
     console.error('Migration failed:', err.message);
     throw err;
   } finally {

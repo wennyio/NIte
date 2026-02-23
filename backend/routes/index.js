@@ -23,6 +23,7 @@ const {
   upsertBusinessProfile,
   normalizeHours
 } = require('../modules/business-profile');
+const { isResendConfigured, sendBookingEmails } = require('../modules/mailer');
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -203,6 +204,39 @@ router.post('/book', async (req, res) => {
     }).select('*').single();
     if (error) throw error;
     res.status(201).json(data);
+
+    // Booking confirmation emails are best-effort and should not block booking creation.
+    setImmediate(async () => {
+      try {
+        if (!isResendConfigured()) return;
+        const liveCustomer = await getLiveCustomer(supabase);
+        const profile = await getBusinessProfile(supabase, liveCustomer);
+        if (profile.booking_confirmation_enabled === false) return;
+
+        const catalog = await fetchCatalog(supabase);
+        const selectedService = (Array.isArray(catalog) ? catalog : []).find((item) => String(item.id) === String(selectedServiceId));
+        const businessName = profile.display_name || liveCustomer?.business_name || 'Your Business';
+        const ownerEmail = profile.contact_email || liveCustomer?.owner_email || null;
+        const serviceName = selectedService?.name || 'Selected service';
+
+        const emailResult = await sendBookingEmails({
+          businessName,
+          clientName: client_name,
+          clientEmail: client_email,
+          clientPhone: client_phone,
+          ownerEmail,
+          serviceName,
+          appointmentDate: appointment_date,
+          appointmentTime: appointment_time,
+          notes
+        });
+        if (!emailResult.sent && Array.isArray(emailResult.failures) && emailResult.failures.length) {
+          console.error('Booking email send failed:', emailResult.failures.join('; '));
+        }
+      } catch (emailErr) {
+        console.error('Booking email dispatch error:', emailErr.message);
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

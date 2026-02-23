@@ -6,6 +6,7 @@ const { execSync } = require('child_process');
 const { parseGeneratedOutput } = require('../generator/parser');
 const { getSupabaseClient } = require('../modules/supabase');
 const { getLiveAppFiles } = require('../modules/live-app');
+const { upsertCatalogItemByName, deactivateCatalogItemByName } = require('../modules/catalog');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -36,6 +37,92 @@ function normalizePath(filePath) {
   return String(filePath || '')
     .replace(/\\/g, '/')
     .replace(/^\.?\//, '');
+}
+
+function normalizeServiceName(name) {
+  const cleaned = String(name || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[.,;:!?]+$/g, '')
+    .trim();
+  return cleaned
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function parseCatalogIntent(message) {
+  const text = String(message || '').trim();
+  if (!text) return null;
+
+  const durationMatch = text.match(/(\d+)\s*(?:min|mins|minutes?)/i);
+  const duration_minutes = durationMatch ? Number(durationMatch[1]) : undefined;
+  const pricePatterns = [
+    /(?:price\s+for|new)\s+([a-z][a-z\s&'/-]{2,60}?)\s+(?:is|to|at|for)\s*\$?\s*(\d{1,5}(?:\.\d{1,2})?)/i,
+    /(?:add|create)\s+(?:new\s+)?([a-z][a-z\s&'/-]{2,60}?)\s+(?:service\s+)?(?:for|at|is)\s*\$?\s*(\d{1,5}(?:\.\d{1,2})?)/i,
+    /(?:set|update|change)\s+(?:the\s+)?(?:price\s+for\s+)?([a-z][a-z\s&'/-]{2,60}?)\s+(?:to|at|is)\s*\$?\s*(\d{1,5}(?:\.\d{1,2})?)/i
+  ];
+
+  for (const pattern of pricePatterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const name = normalizeServiceName(match[1]);
+    const price = Number(match[2]);
+    if (!name || !Number.isFinite(price)) continue;
+    return {
+      type: 'upsert',
+      name,
+      price,
+      duration_minutes
+    };
+  }
+
+  const removeMatch = text.match(/(?:remove|delete)\s+(?:the\s+)?service\s+([a-z][a-z\s&'/-]{2,60})/i);
+  if (removeMatch) {
+    const name = normalizeServiceName(removeMatch[1]);
+    if (name) return { type: 'remove', name };
+  }
+
+  return null;
+}
+
+function hasVisualIntent(message, imageUrl) {
+  if (imageUrl) return true;
+  const visualPattern = /\b(hero|header|image|background|color|palette|layout|section|button|font|page|nav|footer|about|design|style|theme)\b/i;
+  return visualPattern.test(String(message || ''));
+}
+
+async function executeCatalogIntent(supabase, intent) {
+  if (!intent) return null;
+
+  if (intent.type === 'upsert') {
+    const result = await upsertCatalogItemByName(supabase, {
+      name: intent.name,
+      price: intent.price,
+      duration_minutes: intent.duration_minutes || 60,
+      is_active: true
+    });
+    return {
+      summary: `Updated services data: ${result.action === 'created' ? 'added' : 'updated'} "${result.item.name}" at $${result.item.price}.`,
+      details: result
+    };
+  }
+
+  if (intent.type === 'remove') {
+    const result = await deactivateCatalogItemByName(supabase, intent.name);
+    if (!result.item) {
+      return {
+        summary: `I couldn't find a service named "${intent.name}" to remove.`,
+        details: result
+      };
+    }
+    return {
+      summary: `Updated services data: removed "${result.item.name}" from active offerings.`,
+      details: result
+    };
+  }
+
+  return null;
 }
 
 // Read current source files from disk
@@ -136,8 +223,31 @@ router.post('/chat', async (req, res) => {
     if (!message) return res.status(400).json({ error: 'Message required' });
 
     const supabase = getSupabaseOrThrow();
+    const catalogIntent = parseCatalogIntent(message);
+    let catalogResult = null;
+    if (catalogIntent) {
+      try {
+        catalogResult = await executeCatalogIntent(supabase, catalogIntent);
+      } catch (err) {
+        console.error('Catalog intent execution failed:', err.message);
+      }
+    }
+
+    if (catalogResult && !hasVisualIntent(message, imageUrl)) {
+      return res.json({
+        reply: `${catalogResult.summary} Refresh the page to see updated services and prices.`,
+        rebuilt: false,
+        filesChanged: 0,
+        liveBusiness: null,
+        customerId: null
+      });
+    }
+
     const { files: currentFiles, targetCustomerId, liveCustomer } = await getCurrentFiles(supabase);
     const liveBusiness = liveCustomer?.business_name || 'Unknown business';
+    const catalogPromptContext = catalogResult
+      ? `\n\nCatalog data update already applied at DB level: ${catalogResult.summary}\nDo not fake service changes in fallback arrays. Keep frontend rendering from /api/services.\n`
+      : '';
 
     const systemPrompt = `You are an AI assistant embedded in a business owner's website dashboard. You help them edit and improve their live website.
 
@@ -160,6 +270,7 @@ Rules for editing:
 - Make changes precisely — don't redesign everything when asked for a small change
 - After listing changed files, add a line: ===REBUILD===  (only when files were changed)
 - If just answering a question or chatting, do NOT output any FILE blocks
+${catalogPromptContext}
 
 Current website files:
 ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
@@ -262,9 +373,10 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
         .replace(/===FILE:[\s\S]*?===END FILE===/g, '')
         .replace(/===REBUILD===/g, '')
         .trim() || "Done! Your site has been updated. Refresh to see the changes.";
+      const reply = catalogResult ? `${cleanResponse}\n\n${catalogResult.summary}` : cleanResponse;
 
       return res.json({
-        reply: cleanResponse,
+        reply,
         rebuilt: true,
         filesChanged: files.length,
         liveBusiness,
@@ -274,8 +386,9 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
 
     // Just a conversation response
     const cleanResponse = rawOutput.trim();
+    const reply = catalogResult ? `${cleanResponse}\n\n${catalogResult.summary}` : cleanResponse;
     res.json({
-      reply: cleanResponse,
+      reply,
       rebuilt: false,
       liveBusiness,
       customerId: targetCustomerId || null

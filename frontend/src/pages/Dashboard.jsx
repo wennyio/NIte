@@ -105,11 +105,16 @@ export default function Dashboard() {
   const [appointments, setAppointments] = useState([]);
   const [clients, setClients] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [services, setServices] = useState([]);
   const [revenue, setRevenue] = useState(null);
   const [loading, setLoading] = useState(false);
   const [dateFilter, setDateFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [clientSearch, setClientSearch] = useState('');
+  const [newService, setNewService] = useState({ name: '', price: '', duration_minutes: '60', description: '' });
+  const [serviceEdits, setServiceEdits] = useState({});
+  const [serviceBusy, setServiceBusy] = useState(false);
+  const [serviceMessage, setServiceMessage] = useState('');
 
   const api = (url, opts = {}) => axios({ url, ...opts, headers: { Authorization: `Bearer ${token}`, ...opts.headers } });
 
@@ -133,6 +138,20 @@ export default function Dashboard() {
     fetchTab(tab);
   }, [token, tab]);
 
+  const hydrateServiceEdits = (list) => {
+    const next = {};
+    (Array.isArray(list) ? list : []).forEach((s) => {
+      next[s.id] = {
+        name: s.name || '',
+        price: String(s.price ?? ''),
+        duration_minutes: String(s.duration_minutes ?? 60),
+        description: s.description || '',
+        is_active: s.is_active !== false
+      };
+    });
+    setServiceEdits(next);
+  };
+
   const fetchTab = async (t) => {
     setLoading(true);
     try {
@@ -148,6 +167,11 @@ export default function Dashboard() {
       } else if (t === 'staff') {
         const r = await api('/api/dashboard/staff');
         setStaff(Array.isArray(r.data) ? r.data : []);
+      } else if (t === 'services') {
+        const r = await api('/api/dashboard/services');
+        const list = Array.isArray(r.data) ? r.data : [];
+        setServices(list);
+        hydrateServiceEdits(list);
       } else if (t === 'revenue') {
         const r = await api('/api/dashboard/revenue');
         setRevenue(r.data);
@@ -167,6 +191,85 @@ export default function Dashboard() {
     pending: '#c9a96e', confirmed: '#6ec9a9', completed: '#888', cancelled: '#e07070'
   })[s] || '#888';
 
+  const addService = async () => {
+    const name = newService.name.trim();
+    const price = Number(newService.price);
+    const duration = Number(newService.duration_minutes);
+    if (!name || !Number.isFinite(price) || price < 0 || !Number.isFinite(duration) || duration <= 0) {
+      setServiceMessage('Enter valid name, price, and duration.');
+      return;
+    }
+    setServiceBusy(true);
+    setServiceMessage('');
+    try {
+      const r = await api('/api/dashboard/services', {
+        method: 'POST',
+        data: {
+          name,
+          price,
+          duration_minutes: duration,
+          description: newService.description.trim()
+        }
+      });
+      const next = [...services, r.data];
+      setServices(next);
+      hydrateServiceEdits(next);
+      setNewService({ name: '', price: '', duration_minutes: '60', description: '' });
+      setServiceMessage(`Added service: ${r.data.name}`);
+    } catch {
+      setServiceMessage('Failed to add service.');
+    }
+    setServiceBusy(false);
+  };
+
+  const saveService = async (id) => {
+    const draft = serviceEdits[id];
+    if (!draft) return;
+    const name = draft.name.trim();
+    const price = Number(draft.price);
+    const duration = Number(draft.duration_minutes);
+    if (!name || !Number.isFinite(price) || price < 0 || !Number.isFinite(duration) || duration <= 0) {
+      setServiceMessage('Enter valid values before saving.');
+      return;
+    }
+    setServiceBusy(true);
+    setServiceMessage('');
+    try {
+      const r = await api(`/api/dashboard/services/${id}`, {
+        method: 'PATCH',
+        data: {
+          name,
+          price,
+          duration_minutes: duration,
+          description: draft.description,
+          is_active: draft.is_active !== false
+        }
+      });
+      const next = services.map(s => s.id === id ? r.data : s);
+      setServices(next);
+      hydrateServiceEdits(next);
+      setServiceMessage(`Saved: ${r.data.name}`);
+    } catch {
+      setServiceMessage('Failed to save service.');
+    }
+    setServiceBusy(false);
+  };
+
+  const removeService = async (id) => {
+    setServiceBusy(true);
+    setServiceMessage('');
+    try {
+      await api(`/api/dashboard/services/${id}`, { method: 'DELETE' });
+      const next = services.filter(s => s.id !== id);
+      setServices(next);
+      hydrateServiceEdits(next);
+      setServiceMessage('Service removed.');
+    } catch {
+      setServiceMessage('Failed to remove service.');
+    }
+    setServiceBusy(false);
+  };
+
   if (!token) return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e8e0d4' }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400&family=Montserrat:wght@300;400;500&display=swap'); * { box-sizing:border-box; } input { background:#12120e; border:1px solid #2a2a22; color:#e8e0d4; padding:12px 16px; font-family:'Montserrat',sans-serif; font-size:13px; width:100%; outline:none; transition:border 0.2s; } input:focus { border-color:#c9a96e; } .mono { font-family:'Montserrat',sans-serif; }`}</style>
@@ -185,7 +288,7 @@ export default function Dashboard() {
     </div>
   );
 
-  const tabs = ['appointments', 'clients', 'staff', 'revenue'];
+  const tabs = ['appointments', 'clients', 'staff', 'services', 'revenue'];
 
   return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', color: '#e8e0d4' }}>
@@ -319,6 +422,91 @@ export default function Dashboard() {
                       <td><span className="mono" style={{ fontSize: '10px', color: s.is_active ? '#6ec9a9' : '#e07070' }}>{s.is_active ? 'ACTIVE' : 'INACTIVE'}</span></td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {/* SERVICES */}
+        {tab === 'services' && (
+          <div>
+            <div style={{ marginBottom: '24px', display: 'grid', gridTemplateColumns: '1.2fr 0.6fr 0.6fr 1.6fr auto', gap: '10px', alignItems: 'center' }}>
+              <input
+                placeholder="New service name"
+                value={newService.name}
+                onChange={e => setNewService({ ...newService, name: e.target.value })}
+              />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Price"
+                value={newService.price}
+                onChange={e => setNewService({ ...newService, price: e.target.value })}
+              />
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Minutes"
+                value={newService.duration_minutes}
+                onChange={e => setNewService({ ...newService, duration_minutes: e.target.value })}
+              />
+              <input
+                placeholder="Description (optional)"
+                value={newService.description}
+                onChange={e => setNewService({ ...newService, description: e.target.value })}
+              />
+              <button
+                onClick={addService}
+                disabled={serviceBusy}
+                style={{ background: '#c9a96e', color: '#0a0a08', border: 'none', padding: '8px 16px', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', opacity: serviceBusy ? 0.6 : 1 }}
+              >
+                ADD
+              </button>
+            </div>
+            {serviceMessage && (
+              <div className="mono" style={{ fontSize: '11px', color: '#c9a96e', marginBottom: '14px', letterSpacing: '1px' }}>
+                {serviceMessage}
+              </div>
+            )}
+            {loading ? <div className="mono" style={{ fontSize: '12px', color: '#555' }}>Loading...</div> : (
+              <table>
+                <thead><tr><th>Service</th><th>Price</th><th>Duration</th><th>Description</th><th>Active</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {services.length === 0 && <tr><td colSpan={6} style={{ color: '#444', fontStyle: 'italic' }}>No services found</td></tr>}
+                  {services.map(s => {
+                    const draft = serviceEdits[s.id] || {
+                      name: s.name || '',
+                      price: String(s.price ?? ''),
+                      duration_minutes: String(s.duration_minutes ?? 60),
+                      description: s.description || '',
+                      is_active: s.is_active !== false
+                    };
+                    return (
+                      <tr key={s.id}>
+                        <td><input value={draft.name} onChange={e => setServiceEdits(prev => ({ ...prev, [s.id]: { ...draft, name: e.target.value } }))} /></td>
+                        <td><input type="number" min="0" step="0.01" value={draft.price} onChange={e => setServiceEdits(prev => ({ ...prev, [s.id]: { ...draft, price: e.target.value } }))} /></td>
+                        <td><input type="number" min="1" step="1" value={draft.duration_minutes} onChange={e => setServiceEdits(prev => ({ ...prev, [s.id]: { ...draft, duration_minutes: e.target.value } }))} /></td>
+                        <td><input value={draft.description} onChange={e => setServiceEdits(prev => ({ ...prev, [s.id]: { ...draft, description: e.target.value } }))} /></td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={draft.is_active !== false}
+                            onChange={e => setServiceEdits(prev => ({ ...prev, [s.id]: { ...draft, is_active: e.target.checked } }))}
+                            style={{ width: '16px', height: '16px' }}
+                          />
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button onClick={() => saveService(s.id)} disabled={serviceBusy} style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#c9a96e', fontFamily: 'Montserrat', fontSize: '9px', letterSpacing: '1px', padding: '6px 10px', cursor: 'pointer' }}>Save</button>
+                            <button onClick={() => removeService(s.id)} disabled={serviceBusy} style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#e07070', fontFamily: 'Montserrat', fontSize: '9px', letterSpacing: '1px', padding: '6px 10px', cursor: 'pointer' }}>Remove</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}

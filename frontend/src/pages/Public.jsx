@@ -241,9 +241,24 @@ export default function Public() {
       )}
 
       {/* FOOTER */}
-      <div style={{ borderTop: '1px solid #1a1a14', padding: '32px 48px', display: 'flex', justifyContent: 'space-between' }}>
-        <div className="mono" style={{ fontSize: '10px', color: '#444', letterSpacing: '2px' }}>{SALON_NAME.toUpperCase()} © 2026</div>
-        <div className="mono" style={{ fontSize: '10px', color: '#444', letterSpacing: '2px' }}>POWERED BY NITE</div>
+      <div style={{ borderTop: '1px solid #1a1a14', padding: '32px 48px', display: 'grid', gap: '18px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+          <div className="mono" style={{ fontSize: '10px', color: '#444', letterSpacing: '2px' }}>{SALON_NAME.toUpperCase()} © 2026</div>
+          <div className="mono" style={{ fontSize: '10px', color: '#444', letterSpacing: '2px' }}>POWERED BY NITE</div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '18px' }}>
+          <div style={{ display: 'flex', gap: '18px' }}>
+            <a className="mono" href="/terms" style={{ fontSize: '10px', letterSpacing: '2px' }}>Terms</a>
+            <a className="mono" href="/privacy" style={{ fontSize: '10px', letterSpacing: '2px' }}>Privacy</a>
+            <a className="mono" href="/contact" style={{ fontSize: '10px', letterSpacing: '2px' }}>Contact</a>
+          </div>
+          <div style={{ display: 'flex', gap: '18px' }}>
+            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>Instagram</a>
+            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>Facebook</a>
+            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>TikTok</a>
+            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>Twitter</a>
+          </div>
+        </div>
       </div>
     </div>
   );

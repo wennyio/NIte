@@ -40,8 +40,11 @@ YOU GENERATE THESE FILES ONLY:
 
 1. frontend/src/pages/Public.jsx
 2. frontend/src/pages/Dashboard.jsx
-3. frontend/src/components/[ComponentName].jsx (if needed)
-4. frontend/src/App.jsx
+3. frontend/src/pages/Terms.jsx
+4. frontend/src/pages/Privacy.jsx
+5. frontend/src/pages/Contact.jsx
+6. frontend/src/components/[ComponentName].jsx (if needed)
+7. frontend/src/App.jsx
 
 ---
 
@@ -265,14 +268,22 @@ SECTION 5 — FOOTER
 - Very dark background
 - Logo + tagline top
 - Three columns: About · Quick Links · Connect
+- Quick links MUST include: Terms, Privacy, Contact
 - Social links with actual SVG icons (not emoji):
   - Instagram SVG icon
   - Facebook SVG icon  
   - TikTok SVG icon
   - Twitter/X SVG icon
+- Social URLs MUST default to "#" placeholder links unless owner provides exact URLs
 - Copyright bar: © 2026 [Business] · Powered by Nite
 
 ---
+
+LEGAL PAGES — REQUIRED:
+- Create dedicated routes/pages: /terms, /privacy, /contact
+- Terms and Privacy must be complete placeholder legal copy blocks owners can edit
+- Contact page must include a simple contact form (name, email, subject, message)
+- Footer links in Public page must navigate to these legal pages
 
 DASHBOARD STRUCTURE:
 
@@ -349,6 +360,9 @@ routes/index.js:
 App.jsx:
 - / → Public
 - /dashboard → Dashboard
+- /terms → Terms
+- /privacy → Privacy
+- /contact → Contact
 - No login page, no ProtectedRoute wrapper
 
 ---
@@ -367,11 +381,7 @@ GUARD RAILS:
 - Always initialize list state as empty arrays: useState([]) never useState(null) or useState({})
 - Always guard every .map() call: use (Array.isArray(x) ? x : []).map(...)
 - Dashboard.jsx React import MUST always be: import { useState, useEffect, useRef } from 'react';
-- Social links must use realistic placeholder URLs based on business name: 
-  Instagram: https://instagram.com/[businessname]
-  Facebook: https://facebook.com/[businessname]
-  TikTok: https://tiktok.com/@[businessname]
-  Twitter: https://twitter.com/[businessname]
+- Social profile links must default to "#" placeholder URLs until owner explicitly provides real handles
 
 ---
 

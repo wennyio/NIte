@@ -117,6 +117,44 @@ function validateFiles(files) {
     errors.push('Dashboard.jsx AgentWidget must call /api/agent/upload');
   }
 
+  const requiredLegalFiles = [
+    'frontend/src/pages/Terms.jsx',
+    'frontend/src/pages/Privacy.jsx',
+    'frontend/src/pages/Contact.jsx'
+  ];
+  for (const legalPath of requiredLegalFiles) {
+    if (!files.some(f => f.path === legalPath)) {
+      errors.push(`Missing required legal page ${legalPath}`);
+    }
+  }
+
+  const appFile = files.find(f => f.path === 'frontend/src/App.jsx');
+  if (!appFile) {
+    errors.push('Missing required file frontend/src/App.jsx');
+  } else {
+    const appContent = appFile.content || '';
+    if (!appContent.includes('/terms')) errors.push('App.jsx must include route for /terms');
+    if (!appContent.includes('/privacy')) errors.push('App.jsx must include route for /privacy');
+    if (!appContent.includes('/contact')) errors.push('App.jsx must include route for /contact');
+  }
+
+  const publicPage = files.find(f => f.path === 'frontend/src/pages/Public.jsx');
+  if (publicPage) {
+    const publicContent = publicPage.content || '';
+    if (!publicContent.includes('/terms')) errors.push('Public.jsx footer must link to /terms');
+    if (!publicContent.includes('/privacy')) errors.push('Public.jsx footer must link to /privacy');
+    if (!publicContent.includes('/contact')) errors.push('Public.jsx footer must link to /contact');
+  }
+
+  const socialUrlPattern = /https?:\/\/(?:www\.)?(instagram\.com|facebook\.com|tiktok\.com|twitter\.com|x\.com)\//i;
+  for (const file of files) {
+    if (file.path.startsWith('frontend/')) {
+      if (socialUrlPattern.test(file.content || '')) {
+        errors.push(`Social links must default to "#" placeholders, found real social URL in ${file.path}`);
+      }
+    }
+  }
+
   return errors;
 }
 

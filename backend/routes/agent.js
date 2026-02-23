@@ -130,6 +130,9 @@ function getCurrentFilesFromDisk() {
   const filePaths = [
     'frontend/src/pages/Public.jsx',
     'frontend/src/pages/Dashboard.jsx',
+    'frontend/src/pages/Terms.jsx',
+    'frontend/src/pages/Privacy.jsx',
+    'frontend/src/pages/Contact.jsx',
     'frontend/src/App.jsx',
   ];
   const files = [];
@@ -167,6 +170,9 @@ async function getCurrentFiles(supabase) {
     const importantPaths = new Set([
       'frontend/src/pages/Public.jsx',
       'frontend/src/pages/Dashboard.jsx',
+      'frontend/src/pages/Terms.jsx',
+      'frontend/src/pages/Privacy.jsx',
+      'frontend/src/pages/Contact.jsx',
       'frontend/src/App.jsx',
     ]);
     const files = [];
@@ -270,6 +276,8 @@ Rules for editing:
 - Make changes precisely — don't redesign everything when asked for a small change
 - After listing changed files, add a line: ===REBUILD===  (only when files were changed)
 - If just answering a question or chatting, do NOT output any FILE blocks
+- Keep legal pages available at /terms, /privacy, and /contact
+- Social profile links must default to "#" unless the owner explicitly gives exact URLs
 ${catalogPromptContext}
 
 Current website files:

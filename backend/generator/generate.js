@@ -96,7 +96,7 @@ async function generateApp(businessContext, customerId) {
 
   // Save source files to Supabase
   const sourceRows = files
-    .filter(f => !LOCKED_FILES.includes(f.path))
+    .filter(f => !LOCKED_FILES.includes(f.path) && !f.path.startsWith('backend/'))
     .map(f => ({
       customer_id: customerId || null,
       file_path: f.path,

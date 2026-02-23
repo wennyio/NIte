@@ -74,16 +74,38 @@ async function restoreFromSupabase() {
       return;
     }
 
-    const BASE_DIR = path.join(__dirname, '../');
+    const BASE_DIR = path.resolve(__dirname, '../');
+    let restoredCount = 0;
+    let skippedCount = 0;
+
     for (const file of files) {
-      if (LOCKED_FILES.includes(file.file_path)) continue;
-      const fullPath = path.join(BASE_DIR, file.file_path);
+      const normalizedPath = String(file.file_path || '')
+        .replace(/\\/g, '/')
+        .replace(/^\.?\//, '');
+
+      // Never restore backend source from Supabase.
+      if (!normalizedPath || normalizedPath.startsWith('backend/')) {
+        skippedCount++;
+        continue;
+      }
+      if (LOCKED_FILES.includes(normalizedPath)) {
+        skippedCount++;
+        continue;
+      }
+
+      const fullPath = path.resolve(BASE_DIR, normalizedPath);
+      if (!fullPath.startsWith(BASE_DIR + path.sep)) {
+        skippedCount++;
+        continue;
+      }
+
       const dir = path.dirname(fullPath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(fullPath, file.file_content, 'utf8');
+      restoredCount++;
     }
 
-    console.log(`Restored ${files.length} files from Supabase ✓`);
+    console.log(`Restored ${restoredCount} files from Supabase (skipped ${skippedCount}) ✓`);
   } catch (err) {
     console.error('Failed to restore from Supabase:', err.message);
   }

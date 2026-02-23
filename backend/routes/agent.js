@@ -187,7 +187,7 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
 
       // Also save updated source files
       const sourceRows = files
-        .filter(f => !LOCKED_FILES.includes(f.path))
+        .filter(f => !LOCKED_FILES.includes(f.path) && !f.path.startsWith('backend/'))
         .map(f => ({ customer_id: null, file_path: f.path, file_content: f.content, file_type: 'source' }));
 
       // Delete old compiled files and insert new ones

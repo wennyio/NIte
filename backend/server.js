@@ -3,18 +3,13 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { createClient } = require('@supabase/supabase-js');
 const { checkHealth } = require('./modules/health');
 const { runMigrations } = require('./db/migrate');
+const { getSupabaseClient } = require('./modules/supabase');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
 
 app.get('/health', checkHealth);
 app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
@@ -60,6 +55,12 @@ const LOCKED_FILES = [
 
 async function restoreFromSupabase() {
   try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      console.log('Supabase unavailable. Skipping restore from Supabase.');
+      return;
+    }
+
     const { data: files, error } = await supabase
       .from('generated_apps')
       .select('file_path, file_content, file_type')
@@ -89,6 +90,8 @@ async function restoreFromSupabase() {
 const PORT = process.env.PORT || 3000;
 
 async function bootstrap() {
+  app.listen(PORT, () => console.log(`App running on port ${PORT}`));
+
   try {
     await runMigrations();
   } catch (err) {
@@ -97,7 +100,6 @@ async function bootstrap() {
   }
 
   await restoreFromSupabase();
-  app.listen(PORT, () => console.log(`App running on port ${PORT}`));
 }
 
 bootstrap().catch((err) => {

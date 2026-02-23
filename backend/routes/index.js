@@ -1,15 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const { verifyToken, generateToken } = require('../modules/auth');
-const { createClient } = require('@supabase/supabase-js');
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+const { getSupabaseClient } = require('../modules/supabase');
+
+function getSupabaseOr503(res) {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    res.status(503).json({ error: 'Supabase is not configured' });
+    return null;
+  }
+  return supabase;
+}
 
 // AUTH - Login
 router.post('/auth/login', async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { email, password } = req.body;
     const { data, error } = await supabase
       .from('staff')
@@ -30,6 +37,8 @@ router.post('/auth/login', async (req, res) => {
 // SERVICES - Public
 router.get('/services', async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { data, error } = await supabase.from('services').select('*').eq('is_active', true).order('price', { ascending: true });
     if (error) throw error;
     res.json(data);
@@ -41,6 +50,8 @@ router.get('/services', async (req, res) => {
 // STAFF - Public
 router.get('/staff/public', async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { data, error } = await supabase.from('staff').select('id, name, role').eq('is_active', true);
     if (error) throw error;
     res.json(data);
@@ -52,6 +63,8 @@ router.get('/staff/public', async (req, res) => {
 // BOOK - Public
 router.post('/book', async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { client_name, client_email, client_phone, staff_id, service_id, appointment_date, appointment_time, notes } = req.body;
     if (!client_name || !service_id || !appointment_date || !appointment_time) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -81,6 +94,8 @@ router.post('/book', async (req, res) => {
 // DASHBOARD - Appointments
 router.get('/dashboard/appointments', verifyToken, async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { date, status } = req.query;
     let query = supabase.from('appointments').select('*, services(name, price, duration_minutes), staff(name)').order('appointment_date', { ascending: true }).order('appointment_time', { ascending: true });
     if (date) query = query.eq('appointment_date', date);
@@ -95,6 +110,8 @@ router.get('/dashboard/appointments', verifyToken, async (req, res) => {
 
 router.patch('/dashboard/appointments/:id', verifyToken, async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { data, error } = await supabase.from('appointments').update(req.body).eq('id', req.params.id).select('*').single();
     if (error) throw error;
     res.json(data);
@@ -106,6 +123,8 @@ router.patch('/dashboard/appointments/:id', verifyToken, async (req, res) => {
 // DASHBOARD - Clients
 router.get('/dashboard/clients', verifyToken, async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { search } = req.query;
     let query = supabase.from('clients').select('*').order('name');
     if (search) query = query.ilike('name', `%${search}%`);
@@ -119,6 +138,8 @@ router.get('/dashboard/clients', verifyToken, async (req, res) => {
 
 router.get('/dashboard/clients/:id', verifyToken, async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { data: client, error: clientErr } = await supabase.from('clients').select('*').eq('id', req.params.id).single();
     if (clientErr) throw clientErr;
     const { data: history, error: histErr } = await supabase.from('appointments').select('*, services(name, price)').eq('client_id', req.params.id).order('appointment_date', { ascending: false });
@@ -132,6 +153,8 @@ router.get('/dashboard/clients/:id', verifyToken, async (req, res) => {
 // DASHBOARD - Staff
 router.get('/dashboard/staff', verifyToken, async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { data, error } = await supabase.from('staff').select('*').order('name');
     if (error) throw error;
     res.json(data);
@@ -142,6 +165,8 @@ router.get('/dashboard/staff', verifyToken, async (req, res) => {
 
 router.post('/dashboard/staff', verifyToken, async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { data, error } = await supabase.from('staff').insert(req.body).select('*').single();
     if (error) throw error;
     res.status(201).json(data);
@@ -153,6 +178,8 @@ router.post('/dashboard/staff', verifyToken, async (req, res) => {
 // DASHBOARD - Revenue
 router.get('/dashboard/revenue', verifyToken, async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { start_date, end_date } = req.query;
     let query = supabase.from('appointments').select('appointment_date, services(name, price), staff(name)').eq('status', 'completed');
     if (start_date) query = query.gte('appointment_date', start_date);

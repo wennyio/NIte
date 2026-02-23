@@ -17,6 +17,12 @@ const {
   listLegalPages,
   upsertLegalPage
 } = require('../modules/legal-content');
+const {
+  getDefaultBusinessProfile,
+  getBusinessProfile,
+  upsertBusinessProfile,
+  normalizeHours
+} = require('../modules/business-profile');
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -46,8 +52,21 @@ async function fetchCatalog(supabase) {
   return CATALOG_FALLBACK;
 }
 
-async function getLiveCustomerId(supabase) {
+async function getLiveCustomer(supabase) {
   const liveCustomer = await getLatestLiveCustomer(supabase);
+  if (!liveCustomer?.id) return null;
+
+  const detailed = await supabase
+    .from('customers')
+    .select('id, business_name, business_type, owner_name, owner_email, subdomain, app_status')
+    .eq('id', liveCustomer.id)
+    .maybeSingle();
+  if (detailed.error) return liveCustomer;
+  return detailed.data || liveCustomer;
+}
+
+async function getLiveCustomerId(supabase) {
+  const liveCustomer = await getLiveCustomer(supabase);
   return liveCustomer?.id || null;
 }
 
@@ -272,6 +291,41 @@ router.get('/legal/:pageKey', async (req, res) => {
   }
 });
 
+router.get('/business-profile', async (req, res) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return res.json({
+      customer_id: null,
+      profile: getDefaultBusinessProfile(null),
+      fallback: true
+    });
+  }
+
+  try {
+    const liveCustomer = await getLiveCustomer(supabase);
+    const profile = await getBusinessProfile(supabase, liveCustomer);
+    res.json({
+      customer_id: liveCustomer?.id || null,
+      profile,
+      customer: liveCustomer
+        ? {
+            id: liveCustomer.id,
+            business_name: liveCustomer.business_name || null,
+            subdomain: liveCustomer.subdomain || null
+          }
+        : null,
+      fallback: false
+    });
+  } catch (err) {
+    console.error('Failed to load business profile from DB, using defaults:', err.message);
+    res.json({
+      customer_id: null,
+      profile: getDefaultBusinessProfile(null),
+      fallback: true
+    });
+  }
+});
+
 // DASHBOARD - Appointments
 router.get('/dashboard/appointments', verifyToken, async (req, res) => {
   try {
@@ -428,6 +482,85 @@ router.delete('/dashboard/services/:id', verifyToken, async (req, res) => {
     if (!supabase) return;
     const { item, mode } = await deactivateCatalogItem(supabase, req.params.id);
     res.json({ success: true, mode, item });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/dashboard/settings', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const liveCustomer = await getLiveCustomer(supabase);
+    if (!liveCustomer?.id) {
+      return res.status(400).json({ error: 'No live customer selected' });
+    }
+
+    const profile = await getBusinessProfile(supabase, liveCustomer);
+    res.json({
+      customer: liveCustomer,
+      profile
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/dashboard/settings', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const liveCustomer = await getLiveCustomer(supabase);
+    if (!liveCustomer?.id) {
+      return res.status(400).json({ error: 'No live customer selected' });
+    }
+
+    const body = req.body || {};
+    const customerPatch = {};
+    if (body.business_name !== undefined) {
+      const nextBusinessName = String(body.business_name || '').trim();
+      if (!nextBusinessName) return res.status(400).json({ error: 'business_name cannot be empty' });
+      customerPatch.business_name = nextBusinessName;
+    }
+    if (body.owner_name !== undefined) customerPatch.owner_name = String(body.owner_name || '').trim();
+    if (body.owner_email !== undefined) customerPatch.owner_email = String(body.owner_email || '').trim();
+
+    let updatedCustomer = liveCustomer;
+    if (Object.keys(customerPatch).length > 0) {
+      const customerUpdate = await supabase
+        .from('customers')
+        .update(customerPatch)
+        .eq('id', liveCustomer.id)
+        .select('id, business_name, business_type, owner_name, owner_email, subdomain, app_status')
+        .single();
+      if (customerUpdate.error) throw customerUpdate.error;
+      updatedCustomer = customerUpdate.data;
+    }
+
+    const profilePatch = body.profile && typeof body.profile === 'object' ? body.profile : {
+      display_name: body.display_name,
+      tagline: body.tagline,
+      about_text: body.about_text,
+      logo_url: body.logo_url,
+      contact_email: body.contact_email,
+      contact_phone: body.contact_phone,
+      contact_address: body.contact_address,
+      website_url: body.website_url,
+      social_instagram: body.social_instagram,
+      social_facebook: body.social_facebook,
+      social_tiktok: body.social_tiktok,
+      social_twitter: body.social_twitter,
+      booking_confirmation_enabled: body.booking_confirmation_enabled,
+      hours_json: body.hours_json
+    };
+    if (profilePatch.hours_json !== undefined) {
+      profilePatch.hours_json = normalizeHours(profilePatch.hours_json);
+    }
+
+    const profile = await upsertBusinessProfile(supabase, updatedCustomer, profilePatch);
+    res.json({ success: true, customer: updatedCustomer, profile });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

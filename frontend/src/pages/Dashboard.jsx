@@ -2,6 +2,42 @@ import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 const TOKEN_KEY = 'nite_token';
+const SETTINGS_DAY_LABELS = {
+  mon: 'Monday',
+  tue: 'Tuesday',
+  wed: 'Wednesday',
+  thu: 'Thursday',
+  fri: 'Friday',
+  sat: 'Saturday',
+  sun: 'Sunday'
+};
+const DEFAULT_SETTINGS_DRAFT = {
+  business_name: '',
+  owner_name: '',
+  owner_email: '',
+  display_name: '',
+  tagline: '',
+  about_text: '',
+  logo_url: '',
+  contact_email: '',
+  contact_phone: '',
+  contact_address: '',
+  website_url: '',
+  social_instagram: '#',
+  social_facebook: '#',
+  social_tiktok: '#',
+  social_twitter: '#',
+  booking_confirmation_enabled: true,
+  hours_json: {
+    mon: '9:00 AM - 5:00 PM',
+    tue: '9:00 AM - 5:00 PM',
+    wed: '9:00 AM - 5:00 PM',
+    thu: '9:00 AM - 5:00 PM',
+    fri: '9:00 AM - 5:00 PM',
+    sat: '10:00 AM - 4:00 PM',
+    sun: 'Closed'
+  }
+};
 
 function AgentWidget() {
   const [open, setOpen] = useState(false);
@@ -152,6 +188,9 @@ export default function Dashboard() {
   });
   const [legalBusyKey, setLegalBusyKey] = useState('');
   const [legalMessage, setLegalMessage] = useState('');
+  const [settingsDraft, setSettingsDraft] = useState(DEFAULT_SETTINGS_DRAFT);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState('');
 
   const api = (url, opts = {}) => axios({ url, ...opts, headers: { Authorization: `Bearer ${token}`, ...opts.headers } });
 
@@ -209,6 +248,21 @@ export default function Dashboard() {
         const list = Array.isArray(r.data) ? r.data : [];
         setServices(list);
         hydrateServiceEdits(list);
+      } else if (t === 'settings') {
+        const r = await api('/api/dashboard/settings');
+        const customer = r?.data?.customer || {};
+        const profile = r?.data?.profile || {};
+        setSettingsDraft({
+          ...DEFAULT_SETTINGS_DRAFT,
+          ...profile,
+          business_name: customer.business_name || '',
+          owner_name: customer.owner_name || '',
+          owner_email: customer.owner_email || '',
+          hours_json: {
+            ...DEFAULT_SETTINGS_DRAFT.hours_json,
+            ...(profile.hours_json || {})
+          }
+        });
       } else if (t === 'legal') {
         const r = await api('/api/dashboard/legal-content');
         const pages = r?.data?.pages || {};
@@ -370,6 +424,69 @@ export default function Dashboard() {
     setLegalBusyKey('');
   };
 
+  const updateSettingsField = (field, value) => {
+    setSettingsDraft(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const updateSettingsHours = (dayKey, value) => {
+    setSettingsDraft(prev => ({
+      ...prev,
+      hours_json: {
+        ...(prev.hours_json || {}),
+        [dayKey]: value
+      }
+    }));
+  };
+
+  const saveSettings = async () => {
+    setSettingsBusy(true);
+    setSettingsMessage('');
+    try {
+      const payload = {
+        business_name: settingsDraft.business_name,
+        owner_name: settingsDraft.owner_name,
+        owner_email: settingsDraft.owner_email,
+        profile: {
+          display_name: settingsDraft.display_name,
+          tagline: settingsDraft.tagline,
+          about_text: settingsDraft.about_text,
+          logo_url: settingsDraft.logo_url,
+          contact_email: settingsDraft.contact_email,
+          contact_phone: settingsDraft.contact_phone,
+          contact_address: settingsDraft.contact_address,
+          website_url: settingsDraft.website_url,
+          social_instagram: settingsDraft.social_instagram,
+          social_facebook: settingsDraft.social_facebook,
+          social_tiktok: settingsDraft.social_tiktok,
+          social_twitter: settingsDraft.social_twitter,
+          booking_confirmation_enabled: settingsDraft.booking_confirmation_enabled !== false,
+          hours_json: settingsDraft.hours_json || {}
+        }
+      };
+      const r = await api('/api/dashboard/settings', { method: 'PATCH', data: payload });
+      const customer = r?.data?.customer || {};
+      const profile = r?.data?.profile || {};
+      setSettingsDraft({
+        ...DEFAULT_SETTINGS_DRAFT,
+        ...profile,
+        business_name: customer.business_name || settingsDraft.business_name || '',
+        owner_name: customer.owner_name || settingsDraft.owner_name || '',
+        owner_email: customer.owner_email || settingsDraft.owner_email || '',
+        hours_json: {
+          ...DEFAULT_SETTINGS_DRAFT.hours_json,
+          ...(profile.hours_json || {})
+        }
+      });
+      setSettingsMessage('Settings saved. Public site updates are now live.');
+    } catch {
+      setSettingsMessage('Failed to save settings.');
+    }
+    setSettingsBusy(false);
+  };
+
   if (!token) return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e8e0d4' }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400&family=Montserrat:wght@300;400;500&display=swap'); * { box-sizing:border-box; } input { background:#12120e; border:1px solid #2a2a22; color:#e8e0d4; padding:12px 16px; font-family:'Montserrat',sans-serif; font-size:13px; width:100%; outline:none; transition:border 0.2s; } input:focus { border-color:#c9a96e; } .mono { font-family:'Montserrat',sans-serif; }`}</style>
@@ -388,7 +505,7 @@ export default function Dashboard() {
     </div>
   );
 
-  const tabs = ['appointments', 'clients', 'staff', 'services', 'legal', 'revenue'];
+  const tabs = ['appointments', 'clients', 'staff', 'services', 'settings', 'legal', 'revenue'];
 
   return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', color: '#e8e0d4' }}>
@@ -610,6 +727,90 @@ export default function Dashboard() {
                 </tbody>
               </table>
             )}
+          </div>
+        )}
+
+        {/* SETTINGS */}
+        {tab === 'settings' && (
+          <div>
+            {settingsMessage && (
+              <div className="mono" style={{ fontSize: '11px', color: '#c9a96e', marginBottom: '14px', letterSpacing: '1px' }}>
+                {settingsMessage}
+              </div>
+            )}
+            <div style={{ display: 'grid', gap: '14px' }}>
+              <div style={{ border: '1px solid #1a1a14', padding: '16px' }}>
+                <div className="mono" style={{ fontSize: '10px', color: '#888', letterSpacing: '2px', marginBottom: '10px' }}>BUSINESS IDENTITY</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <input placeholder="Business name" value={settingsDraft.business_name || ''} onChange={(e) => updateSettingsField('business_name', e.target.value)} />
+                  <input placeholder="Display name (public site)" value={settingsDraft.display_name || ''} onChange={(e) => updateSettingsField('display_name', e.target.value)} />
+                </div>
+                <input placeholder="Tagline" value={settingsDraft.tagline || ''} onChange={(e) => updateSettingsField('tagline', e.target.value)} style={{ marginTop: '10px' }} />
+                <input placeholder="Logo URL (https://...)" value={settingsDraft.logo_url || ''} onChange={(e) => updateSettingsField('logo_url', e.target.value)} style={{ marginTop: '10px' }} />
+                <textarea
+                  value={settingsDraft.about_text || ''}
+                  onChange={(e) => updateSettingsField('about_text', e.target.value)}
+                  placeholder="About text shown on public site"
+                  style={{ minHeight: '120px', width: '100%', marginTop: '10px', background: '#12120e', border: '1px solid #1e1e18', color: '#e8e0d4', padding: '12px 14px', fontFamily: 'Montserrat', fontSize: '12px', outline: 'none', resize: 'vertical' }}
+                />
+              </div>
+
+              <div style={{ border: '1px solid #1a1a14', padding: '16px' }}>
+                <div className="mono" style={{ fontSize: '10px', color: '#888', letterSpacing: '2px', marginBottom: '10px' }}>CONTACT + OWNER</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <input placeholder="Owner name" value={settingsDraft.owner_name || ''} onChange={(e) => updateSettingsField('owner_name', e.target.value)} />
+                  <input placeholder="Owner email" value={settingsDraft.owner_email || ''} onChange={(e) => updateSettingsField('owner_email', e.target.value)} />
+                  <input placeholder="Public contact email" value={settingsDraft.contact_email || ''} onChange={(e) => updateSettingsField('contact_email', e.target.value)} />
+                  <input placeholder="Public contact phone" value={settingsDraft.contact_phone || ''} onChange={(e) => updateSettingsField('contact_phone', e.target.value)} />
+                </div>
+                <input placeholder="Business address" value={settingsDraft.contact_address || ''} onChange={(e) => updateSettingsField('contact_address', e.target.value)} style={{ marginTop: '10px' }} />
+                <input placeholder="Website URL (https://...)" value={settingsDraft.website_url || ''} onChange={(e) => updateSettingsField('website_url', e.target.value)} style={{ marginTop: '10px' }} />
+              </div>
+
+              <div style={{ border: '1px solid #1a1a14', padding: '16px' }}>
+                <div className="mono" style={{ fontSize: '10px', color: '#888', letterSpacing: '2px', marginBottom: '10px' }}>SOCIAL LINKS</div>
+                <div className="mono" style={{ fontSize: '10px', color: '#666', marginBottom: '10px', letterSpacing: '1px' }}>
+                  Leave blank to keep safe placeholders (#) until you add your real profiles.
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <input placeholder="Instagram URL" value={settingsDraft.social_instagram || '#'} onChange={(e) => updateSettingsField('social_instagram', e.target.value)} />
+                  <input placeholder="Facebook URL" value={settingsDraft.social_facebook || '#'} onChange={(e) => updateSettingsField('social_facebook', e.target.value)} />
+                  <input placeholder="TikTok URL" value={settingsDraft.social_tiktok || '#'} onChange={(e) => updateSettingsField('social_tiktok', e.target.value)} />
+                  <input placeholder="Twitter/X URL" value={settingsDraft.social_twitter || '#'} onChange={(e) => updateSettingsField('social_twitter', e.target.value)} />
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid #1a1a14', padding: '16px' }}>
+                <div className="mono" style={{ fontSize: '10px', color: '#888', letterSpacing: '2px', marginBottom: '10px' }}>BUSINESS HOURS + NOTIFICATIONS</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  {Object.entries(SETTINGS_DAY_LABELS).map(([dayKey, label]) => (
+                    <div key={dayKey}>
+                      <div className="mono" style={{ fontSize: '10px', color: '#777', letterSpacing: '1px', marginBottom: '6px' }}>{label.toUpperCase()}</div>
+                      <input value={(settingsDraft.hours_json || {})[dayKey] || ''} onChange={(e) => updateSettingsHours(dayKey, e.target.value)} />
+                    </div>
+                  ))}
+                </div>
+                <label className="mono" style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px', color: '#c9a96e', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={settingsDraft.booking_confirmation_enabled !== false}
+                    onChange={(e) => updateSettingsField('booking_confirmation_enabled', e.target.checked)}
+                    style={{ width: '16px', height: '16px' }}
+                  />
+                  SEND BOOKING CONFIRMATION EMAILS
+                </label>
+              </div>
+
+              <div>
+                <button
+                  onClick={saveSettings}
+                  disabled={settingsBusy}
+                  style={{ background: '#c9a96e', color: '#0a0a08', border: 'none', padding: '10px 18px', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', opacity: settingsBusy ? 0.6 : 1 }}
+                >
+                  {settingsBusy ? 'SAVING...' : 'SAVE SETTINGS'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

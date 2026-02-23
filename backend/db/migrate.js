@@ -58,6 +58,30 @@ CREATE TABLE IF NOT EXISTS legal_pages (
   UNIQUE(customer_id, page_key)
 );
 
+CREATE TABLE IF NOT EXISTS business_profiles (
+  id BIGSERIAL PRIMARY KEY,
+  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE UNIQUE,
+  display_name TEXT,
+  tagline TEXT,
+  about_text TEXT,
+  logo_url TEXT,
+  contact_email TEXT,
+  contact_phone TEXT,
+  contact_address TEXT,
+  website_url TEXT,
+  social_instagram TEXT DEFAULT '#',
+  social_facebook TEXT DEFAULT '#',
+  social_tiktok TEXT DEFAULT '#',
+  social_twitter TEXT DEFAULT '#',
+  booking_confirmation_enabled BOOLEAN DEFAULT true,
+  hours_json JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS business_profiles_customer_idx
+  ON business_profiles (customer_id);
+
 CREATE TABLE IF NOT EXISTS nite_schema_migrations (
   name TEXT PRIMARY KEY,
   checksum TEXT NOT NULL,

@@ -116,6 +116,9 @@ function validateFiles(files) {
   if (!dashboardContent.includes('/api/agent/upload')) {
     errors.push('Dashboard.jsx AgentWidget must call /api/agent/upload');
   }
+  if (!dashboardContent.includes('/api/agent/restore-last')) {
+    errors.push('Dashboard.jsx AgentWidget must call /api/agent/restore-last');
+  }
 
   const requiredLegalFiles = [
     'frontend/src/pages/Terms.jsx',

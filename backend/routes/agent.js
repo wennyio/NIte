@@ -7,6 +7,7 @@ const { parseGeneratedOutput } = require('../generator/parser');
 const { getSupabaseClient } = require('../modules/supabase');
 const { getLiveAppFiles } = require('../modules/live-app');
 const { upsertCatalogItemByName, deactivateCatalogItemByName } = require('../modules/catalog');
+const { restoreCompiledFilesToDisk } = require('../modules/restore-generated');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -37,6 +38,137 @@ function normalizePath(filePath) {
   return String(filePath || '')
     .replace(/\\/g, '/')
     .replace(/^\.?\//, '');
+}
+
+function buildCustomerScopedQuery(query, customerId) {
+  return customerId ? query.eq('customer_id', customerId) : query.is('customer_id', null);
+}
+
+async function listGeneratedRowsForCustomer(supabase, customerId) {
+  const query = buildCustomerScopedQuery(
+    supabase
+      .from('generated_apps')
+      .select('file_path, file_content, file_type')
+      .in('file_type', ['source', 'compiled']),
+    customerId
+  );
+  const { data, error } = await query;
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
+function normalizeGeneratedRows(rows, customerId) {
+  const normalized = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const filePath = normalizePath(row.file_path);
+    const fileType = row.file_type === 'compiled' ? 'compiled' : row.file_type === 'source' ? 'source' : null;
+    if (!filePath || !fileType) continue;
+    normalized.push({
+      customer_id: customerId || null,
+      file_path: filePath,
+      file_content: String(row.file_content || ''),
+      file_type: fileType
+    });
+  }
+  return normalized;
+}
+
+async function replaceGeneratedRowsForCustomer(supabase, customerId, rows) {
+  const deleteQuery = buildCustomerScopedQuery(supabase.from('generated_apps').delete(), customerId);
+  const { error: deleteError } = await deleteQuery;
+  if (deleteError) throw deleteError;
+
+  const normalizedRows = normalizeGeneratedRows(rows, customerId);
+  for (let i = 0; i < normalizedRows.length; i += 50) {
+    const { error: insertError } = await supabase
+      .from('generated_apps')
+      .insert(normalizedRows.slice(i, i + 50));
+    if (insertError) throw insertError;
+  }
+}
+
+async function createRevisionSnapshot(supabase, customerId, summary) {
+  const currentRows = await listGeneratedRowsForCustomer(supabase, customerId);
+  const payload = normalizeGeneratedRows(currentRows, customerId).map((row) => ({
+    file_path: row.file_path,
+    file_content: row.file_content,
+    file_type: row.file_type
+  }));
+  if (payload.length === 0) {
+    return { saved: false, reason: 'empty-current-state' };
+  }
+
+  const latestQuery = buildCustomerScopedQuery(
+    supabase
+      .from('generated_app_revisions')
+      .select('revision_number')
+      .order('revision_number', { ascending: false })
+      .limit(1),
+    customerId
+  );
+  const latest = await latestQuery.maybeSingle();
+  if (latest.error) throw latest.error;
+  const nextRevision = Number(latest.data?.revision_number || 0) + 1;
+
+  const insertPayload = {
+    customer_id: customerId || null,
+    revision_number: nextRevision,
+    summary: String(summary || '').slice(0, 500),
+    payload
+  };
+  const inserted = await supabase
+    .from('generated_app_revisions')
+    .insert(insertPayload)
+    .select('id, revision_number')
+    .single();
+  if (inserted.error) throw inserted.error;
+
+  return {
+    saved: true,
+    revisionId: inserted.data.id,
+    revisionNumber: inserted.data.revision_number,
+    files: payload.length
+  };
+}
+
+async function getLatestRevisionSnapshot(supabase, customerId) {
+  const query = buildCustomerScopedQuery(
+    supabase
+      .from('generated_app_revisions')
+      .select('id, revision_number, summary, payload, created_at')
+      .order('created_at', { ascending: false })
+      .limit(1),
+    customerId
+  );
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+function restoreSourceFilesToDisk(rows) {
+  let restoredCount = 0;
+  let skippedCount = 0;
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row.file_type !== 'source') continue;
+    const normalizedPath = normalizePath(row.file_path);
+    if (!normalizedPath.startsWith('frontend/src/') || LOCKED_FILES.includes(normalizedPath)) {
+      skippedCount++;
+      continue;
+    }
+
+    const fullPath = path.resolve(BASE_DIR, normalizedPath);
+    if (!fullPath.startsWith(BASE_DIR + path.sep)) {
+      skippedCount++;
+      continue;
+    }
+
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, row.file_content || '', 'utf8');
+    restoredCount++;
+  }
+
+  return { restoredCount, skippedCount };
 }
 
 function normalizeServiceName(name) {
@@ -222,6 +354,47 @@ router.post('/upload', upload.single('image'), async (req, res) => {
   }
 });
 
+router.post('/restore-last', async (req, res) => {
+  try {
+    const supabase = getSupabaseOrThrow();
+    const { targetCustomerId, liveCustomer } = await getCurrentFiles(supabase);
+    const persistCustomerId = targetCustomerId || null;
+
+    const snapshot = await getLatestRevisionSnapshot(supabase, persistCustomerId);
+    if (!snapshot) {
+      return res.status(404).json({ error: 'No restore snapshot available yet. Make one site update first.' });
+    }
+
+    const rows = normalizeGeneratedRows(snapshot.payload, persistCustomerId);
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'Latest snapshot is empty and cannot be restored.' });
+    }
+
+    const compiledRows = rows.filter((row) => row.file_type === 'compiled');
+    if (compiledRows.length === 0) {
+      return res.status(400).json({ error: 'Snapshot is missing compiled output and cannot be restored.' });
+    }
+
+    await replaceGeneratedRowsForCustomer(supabase, persistCustomerId, rows);
+    const sourceStats = restoreSourceFilesToDisk(rows);
+    const compiledStats = restoreCompiledFilesToDisk(compiledRows);
+
+    return res.json({
+      success: true,
+      restored: true,
+      restoredRevision: snapshot.revision_number,
+      filesRestored: rows.length,
+      sourceFilesRestored: sourceStats.restoredCount,
+      compiledFilesRestored: compiledStats.restoredCount,
+      liveBusiness: liveCustomer?.business_name || null,
+      customerId: persistCustomerId
+    });
+  } catch (err) {
+    console.error('Agent restore error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Main agent chat endpoint
 router.post('/chat', async (req, res) => {
   try {
@@ -314,6 +487,18 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
     const shouldRebuild = rawOutput.includes('===REBUILD===');
 
     if (shouldRebuild) {
+      const persistCustomerId = targetCustomerId || null;
+      try {
+        await createRevisionSnapshot(
+          supabase,
+          persistCustomerId,
+          `Before agent rebuild: ${String(message || '').slice(0, 220)}`
+        );
+      } catch (snapshotErr) {
+        // Snapshot failure should not block a requested site update.
+        console.error('Failed to capture restore snapshot:', snapshotErr.message);
+      }
+
       // Parse and write changed files
       const files = parseGeneratedOutput(rawOutput);
 
@@ -331,7 +516,6 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       execSync('npm run build --prefix frontend -- --outDir dist', { cwd: BASE_DIR, stdio: 'inherit' });
 
       // Persist updates for the active live app context
-      const persistCustomerId = targetCustomerId || null;
       const distDir = path.join(BASE_DIR, 'frontend/dist');
       const compiledRows = [];
 
@@ -342,7 +526,7 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
           if (entry.isDirectory()) {
             readDist(fullPath);
           } else {
-            const relativePath = 'frontend/dist' + fullPath.replace(distDir, '');
+            const relativePath = normalizePath('frontend/dist' + fullPath.replace(distDir, ''));
             try {
               compiledRows.push({
                 customer_id: persistCustomerId,
@@ -360,21 +544,13 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       // Capture a full source snapshot so context stays consistent on next chat.
       const sourceRows = getCurrentFilesFromDisk().map((f) => ({
         customer_id: persistCustomerId,
-        file_path: f.path,
+        file_path: normalizePath(f.path),
         file_content: f.content,
         file_type: 'source'
       }));
 
-      if (persistCustomerId) {
-        await supabase.from('generated_apps').delete().eq('customer_id', persistCustomerId);
-      } else {
-        await supabase.from('generated_apps').delete().is('customer_id', null);
-      }
-
       const allRows = [...sourceRows, ...compiledRows];
-      for (let i = 0; i < allRows.length; i += 50) {
-        await supabase.from('generated_apps').insert(allRows.slice(i, i + 50));
-      }
+      await replaceGeneratedRowsForCustomer(supabase, persistCustomerId, allRows);
 
       // Clean response text (remove file blocks)
       const cleanResponse = rawOutput

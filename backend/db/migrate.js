@@ -35,6 +35,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS generated_apps_customer_path_unique
 CREATE INDEX IF NOT EXISTS generated_apps_customer_file_type_idx
   ON generated_apps (customer_id, file_type);
 
+CREATE TABLE IF NOT EXISTS generated_app_revisions (
+  id BIGSERIAL PRIMARY KEY,
+  customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+  revision_number BIGINT NOT NULL,
+  summary TEXT,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS generated_app_revisions_customer_created_idx
+  ON generated_app_revisions (customer_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS legal_pages (
   id BIGSERIAL PRIMARY KEY,
   customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,

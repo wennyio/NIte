@@ -12,6 +12,7 @@ const {
 } = require('../modules/catalog');
 const {
   normalizePageKey,
+  getDefaultLegalPage,
   getLegalPage,
   listLegalPages,
   upsertLegalPage
@@ -461,6 +462,33 @@ router.patch('/dashboard/legal-content/:pageKey', verifyToken, async (req, res) 
 
     const updated = await upsertLegalPage(supabase, customerId, pageKey, req.body || {});
     res.json({ success: true, page: updated, customer_id: customerId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/dashboard/legal-content/:pageKey/restore', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+    const pageKey = normalizePageKey(req.params.pageKey);
+    if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
+
+    const customerId = await getLiveCustomerId(supabase);
+    if (!customerId) {
+      return res.status(400).json({ error: 'No live customer selected' });
+    }
+
+    const defaults = getDefaultLegalPage(pageKey);
+    if (!defaults) {
+      return res.status(400).json({ error: 'Invalid legal page key' });
+    }
+
+    const updated = await upsertLegalPage(supabase, customerId, pageKey, {
+      title: defaults.title,
+      content: defaults.content
+    });
+    res.json({ success: true, restored: true, page: updated, customer_id: customerId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

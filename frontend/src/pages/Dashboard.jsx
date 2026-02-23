@@ -10,6 +10,7 @@ function AgentWidget() {
   const [imageUrl, setImageUrl] = useState('');
   const [uploading, setUploading] = useState(false);
   const [thinking, setThinking] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [history, setHistory] = useState([]);
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -18,7 +19,7 @@ function AgentWidget() {
 
   const sendMessage = async () => {
     const val = input.trim();
-    if (!val || thinking) return;
+    if (!val || thinking || restoring) return;
     setInput('');
     const userMsg = { from: 'user', text: val + (imageUrl ? ' [Image attached]' : '') };
     setMessages(prev => [...prev, userMsg]);
@@ -54,6 +55,28 @@ function AgentWidget() {
     setUploading(false);
   };
 
+  const restoreLastVersion = async () => {
+    if (restoring || thinking) return;
+    setRestoring(true);
+    try {
+      const r = await axios.post('/api/agent/restore-last');
+      const contextNote = r.data.liveBusiness ? `\n\n(Editing live site: ${r.data.liveBusiness})` : '';
+      setMessages(prev => [
+        ...prev,
+        {
+          from: 'agent',
+          text: `Restored your last saved version. Refresh the page to confirm the rollback.${contextNote}`,
+          rebuilt: true,
+          filesChanged: r.data.filesRestored || 0
+        }
+      ]);
+    } catch (err) {
+      const restoreError = err?.response?.data?.error || 'Restore failed. Make one site update first, then try again.';
+      setMessages(prev => [...prev, { from: 'agent', text: restoreError }]);
+    }
+    setRestoring(false);
+  };
+
   return (
     <>
       <button onClick={() => setOpen(!open)} style={{ position: 'fixed', bottom: '32px', right: '32px', zIndex: 1000, width: '56px', height: '56px', borderRadius: '50%', background: '#c9a96e', border: 'none', cursor: 'pointer', fontSize: '22px', boxShadow: '0 4px 24px rgba(0,0,0,0.4)', transition: 'transform 0.2s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.1)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
@@ -81,12 +104,19 @@ function AgentWidget() {
           <div style={{ padding: '12px 16px', borderTop: '1px solid #1e1e1a' }}>
             <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
               <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendMessage()} placeholder="Ask me to change anything..." style={{ flex: 1, background: '#0a0a08', border: '1px solid #1e1e1a', color: '#e8e0d4', padding: '10px 14px', borderRadius: '8px', fontFamily: 'Montserrat,sans-serif', fontSize: '13px', outline: 'none' }} />
-              <button onClick={sendMessage} disabled={!input.trim() || thinking} style={{ background: '#c9a96e', border: 'none', color: '#0a0a08', width: '40px', height: '40px', borderRadius: '8px', cursor: 'pointer', fontSize: '16px', opacity: (!input.trim() || thinking) ? 0.4 : 1 }}>→</button>
+              <button onClick={sendMessage} disabled={!input.trim() || thinking || restoring} style={{ background: '#c9a96e', border: 'none', color: '#0a0a08', width: '40px', height: '40px', borderRadius: '8px', cursor: 'pointer', fontSize: '16px', opacity: (!input.trim() || thinking || restoring) ? 0.4 : 1 }}>→</button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUpload} style={{ display: 'none' }} />
-              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} style={{ background: 'transparent', border: '1px solid #1e1e1a', color: '#666', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'Montserrat,sans-serif', fontSize: '10px', letterSpacing: '1px' }}>
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploading || restoring || thinking} style={{ background: 'transparent', border: '1px solid #1e1e1a', color: '#666', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'Montserrat,sans-serif', fontSize: '10px', letterSpacing: '1px', opacity: (uploading || restoring || thinking) ? 0.5 : 1 }}>
                 {uploading ? '↑ UPLOADING...' : '↑ UPLOAD IMAGE'}
+              </button>
+              <button
+                onClick={restoreLastVersion}
+                disabled={restoring || thinking}
+                style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#c9a96e', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'Montserrat,sans-serif', fontSize: '10px', letterSpacing: '1px', opacity: (restoring || thinking) ? 0.5 : 1 }}
+              >
+                {restoring ? '↺ RESTORING...' : '↺ RESTORE LAST'}
               </button>
               {imageUrl && <div style={{ fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#6ec9a9' }}>✓ ready</div>}
             </div>
@@ -301,7 +331,7 @@ export default function Dashboard() {
       setLegalMessage('Title and content are required.');
       return;
     }
-    setLegalBusyKey(key);
+    setLegalBusyKey(`save:${key}`);
     setLegalMessage('');
     try {
       await api(`/api/dashboard/legal-content/${key}`, {
@@ -314,6 +344,28 @@ export default function Dashboard() {
       setLegalMessage(`Saved ${key} page.`);
     } catch {
       setLegalMessage(`Failed to save ${key} page.`);
+    }
+    setLegalBusyKey('');
+  };
+
+  const restoreLegalPage = async (key) => {
+    setLegalBusyKey(`restore:${key}`);
+    setLegalMessage('');
+    try {
+      const r = await api(`/api/dashboard/legal-content/${key}/restore`, { method: 'POST' });
+      const updated = r?.data?.page;
+      if (updated) {
+        setLegalContent(prev => ({
+          ...prev,
+          [key]: {
+            title: updated.title || '',
+            content: updated.content || ''
+          }
+        }));
+      }
+      setLegalMessage(`Restored default ${key} page.`);
+    } catch {
+      setLegalMessage(`Failed to restore ${key} page.`);
     }
     setLegalBusyKey('');
   };
@@ -572,6 +624,9 @@ export default function Dashboard() {
             <div style={{ display: 'grid', gap: '14px' }}>
               {['terms', 'privacy', 'contact'].map((key) => {
                 const draft = legalContent[key] || { title: '', content: '' };
+                const isSaving = legalBusyKey === `save:${key}`;
+                const isRestoring = legalBusyKey === `restore:${key}`;
+                const isBusy = isSaving || isRestoring;
                 return (
                   <div key={key} style={{ border: '1px solid #1a1a14', padding: '16px' }}>
                     <div className="mono" style={{ fontSize: '10px', color: '#888', letterSpacing: '2px', marginBottom: '8px' }}>{key.toUpperCase()} PAGE</div>
@@ -586,13 +641,20 @@ export default function Dashboard() {
                       onChange={(e) => updateLegalDraft(key, 'content', e.target.value)}
                       style={{ minHeight: '150px', width: '100%', background: '#12120e', border: '1px solid #1e1e18', color: '#e8e0d4', padding: '12px 14px', fontFamily: 'Montserrat', fontSize: '12px', outline: 'none', resize: 'vertical' }}
                     />
-                    <div style={{ marginTop: '10px' }}>
+                    <div style={{ marginTop: '10px', display: 'flex', gap: '8px' }}>
                       <button
                         onClick={() => saveLegalPage(key)}
-                        disabled={legalBusyKey === key}
-                        style={{ background: '#c9a96e', color: '#0a0a08', border: 'none', padding: '8px 16px', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', opacity: legalBusyKey === key ? 0.6 : 1 }}
+                        disabled={isBusy}
+                        style={{ background: '#c9a96e', color: '#0a0a08', border: 'none', padding: '8px 16px', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', opacity: isBusy ? 0.6 : 1 }}
                       >
-                        {legalBusyKey === key ? 'SAVING...' : `SAVE ${key.toUpperCase()}`}
+                        {isSaving ? 'SAVING...' : `SAVE ${key.toUpperCase()}`}
+                      </button>
+                      <button
+                        onClick={() => restoreLegalPage(key)}
+                        disabled={isBusy}
+                        style={{ background: 'transparent', color: '#e8e0d4', border: '1px solid #2a2a22', padding: '8px 14px', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '1px', cursor: 'pointer', opacity: isBusy ? 0.6 : 1 }}
+                      >
+                        {isRestoring ? 'RESTORING...' : 'RESTORE DEFAULT'}
                       </button>
                     </div>
                   </div>

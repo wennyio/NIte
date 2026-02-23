@@ -11,6 +11,7 @@ export default function CommandCenter() {
   const [builds, setBuilds] = useState(null);
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(false);
+  const [settingLiveId, setSettingLiveId] = useState('');
 
   const login = (e) => {
     e.preventDefault();
@@ -45,6 +46,18 @@ export default function CommandCenter() {
       console.error(err);
     }
     setLoading(false);
+  };
+
+  const setLiveCustomer = async (customerId) => {
+    if (!customerId) return;
+    setSettingLiveId(customerId);
+    try {
+      await axios.post('/admin/set-live', { customerId });
+      await fetchData();
+    } catch (err) {
+      console.error(err);
+    }
+    setSettingLiveId('');
   };
 
   const tierColor = (tier) => ({
@@ -177,6 +190,23 @@ export default function CommandCenter() {
                       <td><span className="badge" style={{ color: appStatusColor(c.app_status), border: `1px solid ${appStatusColor(c.app_status)}44` }}>{c.app_status?.toUpperCase() || 'LIVE'}</span></td>
                       <td style={{ fontSize: '11px', color: '#555' }}>{c.created_at?.split('T')[0] || '—'}</td>
                       <td>
+                        <button
+                          onClick={() => setLiveCustomer(c.id)}
+                          disabled={settingLiveId === c.id || c.app_status === 'live'}
+                          style={{
+                            background: c.app_status === 'live' ? '#6ec9a922' : 'transparent',
+                            border: `1px solid ${c.app_status === 'live' ? '#6ec9a9' : '#2a2a22'}`,
+                            color: c.app_status === 'live' ? '#6ec9a9' : '#888',
+                            fontFamily: 'Montserrat',
+                            fontSize: '9px',
+                            letterSpacing: '1px',
+                            padding: '5px 8px',
+                            cursor: c.app_status === 'live' ? 'default' : 'pointer',
+                            marginRight: c.container_url ? '8px' : '0'
+                          }}
+                        >
+                          {settingLiveId === c.id ? 'SETTING...' : c.app_status === 'live' ? 'LIVE' : 'SET LIVE'}
+                        </button>
                         {c.container_url && (
                           <a href={c.container_url} target="_blank" rel="noreferrer" style={{ fontSize: '10px', color: '#c9a96e', letterSpacing: '1px', textDecoration: 'none' }}>VIEW APP →</a>
                         )}

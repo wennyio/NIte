@@ -110,4 +110,35 @@ router.get('/build-status', async (req, res) => {
 
 router.get('/ping', (req, res) => res.json({ ping: 'pong' }));
 
+router.post('/set-live', async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const { customerId } = req.body || {};
+    if (!customerId) {
+      return res.status(400).json({ error: 'customerId is required' });
+    }
+
+    const demote = await supabase
+      .from('customers')
+      .update({ app_status: 'pending' })
+      .eq('app_status', 'live')
+      .neq('id', customerId);
+    if (demote.error) throw demote.error;
+
+    const { data, error } = await supabase
+      .from('customers')
+      .update({ app_status: 'live' })
+      .eq('id', customerId)
+      .select('*')
+      .single();
+    if (error) throw error;
+
+    res.json({ success: true, customer: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

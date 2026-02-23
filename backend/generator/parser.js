@@ -35,6 +35,8 @@ function writeFiles(files, baseDir) {
       'backend/modules/billing.js',
       'backend/modules/health.js',
       'backend/db/migrate.js',
+      'backend/db/schema.sql',
+      'backend/routes/index.js',
       'frontend/src/main.jsx',
       'frontend/vite.config.js',
       'frontend/index.html',

@@ -26,6 +26,8 @@ LOCKED FILES (already exist — never generate these):
 - backend/modules/billing.js
 - backend/modules/health.js
 - backend/db/migrate.js
+- backend/db/schema.sql
+- backend/routes/index.js
 - frontend/src/main.jsx
 - frontend/vite.config.js
 - frontend/index.html
@@ -36,12 +38,10 @@ LOCKED FILES (already exist — never generate these):
 
 YOU GENERATE THESE FILES ONLY:
 
-1. backend/db/schema.sql
-2. backend/routes/index.js
-3. frontend/src/pages/Public.jsx
-4. frontend/src/pages/Dashboard.jsx
-5. frontend/src/components/[ComponentName].jsx (if needed)
-6. frontend/src/App.jsx
+1. frontend/src/pages/Public.jsx
+2. frontend/src/pages/Dashboard.jsx
+3. frontend/src/components/[ComponentName].jsx (if needed)
+4. frontend/src/App.jsx
 
 ---
 

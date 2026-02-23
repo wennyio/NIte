@@ -16,6 +16,8 @@ const LOCKED_FILES = [
   'backend/modules/billing.js',
   'backend/modules/health.js',
   'backend/db/migrate.js',
+  'backend/db/schema.sql',
+  'backend/routes/index.js',
   'frontend/src/main.jsx',
   'frontend/vite.config.js',
   'frontend/index.html',
@@ -33,8 +35,6 @@ function getCurrentFiles() {
     'frontend/src/pages/Public.jsx',
     'frontend/src/pages/Dashboard.jsx',
     'frontend/src/App.jsx',
-    'backend/routes/index.js',
-    'backend/db/schema.sql',
   ];
   const files = [];
   for (const p of filePaths) {

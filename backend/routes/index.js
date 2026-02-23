@@ -17,6 +17,13 @@ const {
   listLegalPages,
   upsertLegalPage
 } = require('../modules/legal-content');
+const {
+  getDefaultBusinessProfile,
+  getBusinessProfile,
+  upsertBusinessProfile,
+  normalizeHours
+} = require('../modules/business-profile');
+const { isResendConfigured, sendBookingEmails } = require('../modules/mailer');
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -46,8 +53,41 @@ async function fetchCatalog(supabase) {
   return CATALOG_FALLBACK;
 }
 
-async function getLiveCustomerId(supabase) {
+async function getLiveCustomer(supabase) {
   const liveCustomer = await getLatestLiveCustomer(supabase);
+  if (!liveCustomer?.id) return null;
+
+  const detailed = await supabase
+    .from('customers')
+    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+    .eq('id', liveCustomer.id)
+    .maybeSingle();
+  if (detailed.error) return liveCustomer;
+  return detailed.data || liveCustomer;
+}
+
+async function getCustomerById(supabase, customerId) {
+  if (!customerId) return null;
+  const detailed = await supabase
+    .from('customers')
+    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+    .eq('id', customerId)
+    .maybeSingle();
+  if (detailed.error) return null;
+  return detailed.data || null;
+}
+
+async function getContextCustomer(supabase, req) {
+  const tenantCustomerId = req?.tenant?.id || null;
+  if (tenantCustomerId) {
+    const tenantCustomer = await getCustomerById(supabase, tenantCustomerId);
+    if (tenantCustomer?.id) return tenantCustomer;
+  }
+  return getLiveCustomer(supabase);
+}
+
+async function getLiveCustomerId(supabase, req) {
+  const liveCustomer = await getContextCustomer(supabase, req);
   return liveCustomer?.id || null;
 }
 
@@ -183,7 +223,40 @@ router.post('/book', async (req, res) => {
       staff_id: staff_id || null, service_id: selectedServiceId, appointment_date, appointment_time, notes, status: 'pending'
     }).select('*').single();
     if (error) throw error;
+    const contextCustomer = await getContextCustomer(supabase, req);
     res.status(201).json(data);
+
+    // Booking confirmation emails are best-effort and should not block booking creation.
+    setImmediate(async () => {
+      try {
+        if (!isResendConfigured()) return;
+        const profile = await getBusinessProfile(supabase, contextCustomer);
+        if (profile.booking_confirmation_enabled === false) return;
+
+        const catalog = await fetchCatalog(supabase);
+        const selectedService = (Array.isArray(catalog) ? catalog : []).find((item) => String(item.id) === String(selectedServiceId));
+        const businessName = profile.display_name || contextCustomer?.business_name || 'Your Business';
+        const ownerEmail = profile.contact_email || contextCustomer?.owner_email || null;
+        const serviceName = selectedService?.name || 'Selected service';
+
+        const emailResult = await sendBookingEmails({
+          businessName,
+          clientName: client_name,
+          clientEmail: client_email,
+          clientPhone: client_phone,
+          ownerEmail,
+          serviceName,
+          appointmentDate: appointment_date,
+          appointmentTime: appointment_time,
+          notes
+        });
+        if (!emailResult.sent && Array.isArray(emailResult.failures) && emailResult.failures.length) {
+          console.error('Booking email send failed:', emailResult.failures.join('; '));
+        }
+      } catch (emailErr) {
+        console.error('Booking email dispatch error:', emailErr.message);
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -262,13 +335,77 @@ router.get('/legal/:pageKey', async (req, res) => {
   }
 
   try {
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     const page = await getLegalPage(supabase, customerId, pageKey);
     res.json({ ...page, customer_id: customerId || null, fallback: false });
   } catch (err) {
     // Legal pages should always render. If DB or table lookup fails, serve defaults.
     console.error('Failed to load legal page from DB, using defaults:', err.message);
     res.json({ ...defaultPage, customer_id: null, fallback: true });
+  }
+});
+
+router.get('/business-profile', async (req, res) => {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return res.json({
+      customer_id: null,
+      profile: getDefaultBusinessProfile(null),
+      fallback: true
+    });
+  }
+
+  try {
+    const contextCustomer = await getContextCustomer(supabase, req);
+    const profile = await getBusinessProfile(supabase, contextCustomer);
+    res.json({
+      customer_id: contextCustomer?.id || null,
+      profile,
+      customer: contextCustomer
+        ? {
+            id: contextCustomer.id,
+            business_name: contextCustomer.business_name || null,
+            subdomain: contextCustomer.subdomain || null
+          }
+        : null,
+      fallback: false
+    });
+  } catch (err) {
+    console.error('Failed to load business profile from DB, using defaults:', err.message);
+    res.json({
+      customer_id: null,
+      profile: getDefaultBusinessProfile(null),
+      fallback: true
+    });
+  }
+});
+
+router.get('/tenant-context', async (req, res) => {
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return res.json({
+        host: req.tenantContext?.host || req.headers.host || null,
+        subdomain: req.tenantContext?.subdomain || null,
+        source: req.tenantContext?.source || 'supabase-unavailable',
+        tenantCustomer: req.tenant || null,
+        liveCustomer: null,
+        resolvedCustomer: null
+      });
+    }
+
+    const liveCustomer = await getLiveCustomer(supabase);
+    const resolvedCustomer = await getContextCustomer(supabase, req);
+    res.json({
+      host: req.tenantContext?.host || req.headers.host || null,
+      subdomain: req.tenantContext?.subdomain || null,
+      source: req.tenantContext?.source || 'none',
+      tenantCustomer: req.tenant || null,
+      liveCustomer: liveCustomer || null,
+      resolvedCustomer: resolvedCustomer || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -433,11 +570,90 @@ router.delete('/dashboard/services/:id', verifyToken, async (req, res) => {
   }
 });
 
+router.get('/dashboard/settings', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const contextCustomer = await getContextCustomer(supabase, req);
+    if (!contextCustomer?.id) {
+      return res.status(400).json({ error: 'No live customer selected' });
+    }
+
+    const profile = await getBusinessProfile(supabase, contextCustomer);
+    res.json({
+      customer: contextCustomer,
+      profile
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/dashboard/settings', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const contextCustomer = await getContextCustomer(supabase, req);
+    if (!contextCustomer?.id) {
+      return res.status(400).json({ error: 'No live customer selected' });
+    }
+
+    const body = req.body || {};
+    const customerPatch = {};
+    if (body.business_name !== undefined) {
+      const nextBusinessName = String(body.business_name || '').trim();
+      if (!nextBusinessName) return res.status(400).json({ error: 'business_name cannot be empty' });
+      customerPatch.business_name = nextBusinessName;
+    }
+    if (body.owner_name !== undefined) customerPatch.owner_name = String(body.owner_name || '').trim();
+    if (body.owner_email !== undefined) customerPatch.owner_email = String(body.owner_email || '').trim();
+
+    let updatedCustomer = contextCustomer;
+    if (Object.keys(customerPatch).length > 0) {
+      const customerUpdate = await supabase
+        .from('customers')
+        .update(customerPatch)
+        .eq('id', contextCustomer.id)
+        .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+        .single();
+      if (customerUpdate.error) throw customerUpdate.error;
+      updatedCustomer = customerUpdate.data;
+    }
+
+    const profilePatch = body.profile && typeof body.profile === 'object' ? body.profile : {
+      display_name: body.display_name,
+      tagline: body.tagline,
+      about_text: body.about_text,
+      logo_url: body.logo_url,
+      contact_email: body.contact_email,
+      contact_phone: body.contact_phone,
+      contact_address: body.contact_address,
+      website_url: body.website_url,
+      social_instagram: body.social_instagram,
+      social_facebook: body.social_facebook,
+      social_tiktok: body.social_tiktok,
+      social_twitter: body.social_twitter,
+      booking_confirmation_enabled: body.booking_confirmation_enabled,
+      hours_json: body.hours_json
+    };
+    if (profilePatch.hours_json !== undefined) {
+      profilePatch.hours_json = normalizeHours(profilePatch.hours_json);
+    }
+
+    const profile = await upsertBusinessProfile(supabase, updatedCustomer, profilePatch);
+    res.json({ success: true, customer: updatedCustomer, profile });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/dashboard/legal-content', verifyToken, async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     if (!customerId) {
       return res.status(400).json({ error: 'No live customer selected' });
     }
@@ -461,7 +677,7 @@ router.patch('/dashboard/legal-content/:pageKey', verifyToken, async (req, res) 
     const pageKey = normalizePageKey(req.params.pageKey);
     if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
 
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     if (!customerId) {
       return res.status(400).json({ error: 'No live customer selected' });
     }
@@ -480,7 +696,7 @@ router.post('/dashboard/legal-content/:pageKey/restore', verifyToken, async (req
     const pageKey = normalizePageKey(req.params.pageKey);
     if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
 
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     if (!customerId) {
       return res.status(400).json({ error: 'No live customer selected' });
     }

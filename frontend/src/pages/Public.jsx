@@ -1,12 +1,26 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 
-const SALON_NAME = "Nite Salon";
-const TAGLINE = "Where style meets intention";
+const DEFAULT_PROFILE = {
+  display_name: 'Nite Salon',
+  tagline: 'Where style meets intention',
+  about_text: 'Every appointment is a conversation. We listen, we create, we transform — with precision and care that lasts beyond the chair.',
+  logo_url: '',
+  contact_email: '',
+  contact_phone: '',
+  contact_address: '',
+  website_url: '',
+  social_instagram: '#',
+  social_facebook: '#',
+  social_tiktok: '#',
+  social_twitter: '#',
+  booking_confirmation_enabled: true
+};
 
 export default function Public() {
   const [services, setServices] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [profile, setProfile] = useState(DEFAULT_PROFILE);
   const [view, setView] = useState('home'); // home | book
   const [form, setForm] = useState({
     client_name: '', client_email: '', client_phone: '',
@@ -19,6 +33,13 @@ export default function Public() {
   useEffect(() => {
     axios.get('/api/services').then(r => setServices(r.data)).catch(() => {});
     axios.get('/api/staff/public').then(r => setStaff(r.data)).catch(() => {});
+    axios.get('/api/business-profile')
+      .then((r) => {
+        if (r?.data?.profile) {
+          setProfile((prev) => ({ ...prev, ...r.data.profile }));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const times = [
@@ -42,6 +63,15 @@ export default function Public() {
   };
 
   const selectedService = services.find(s => s.id === form.service_id);
+  const businessName = profile.display_name || DEFAULT_PROFILE.display_name;
+  const tagline = profile.tagline || DEFAULT_PROFILE.tagline;
+  const aboutText = profile.about_text || DEFAULT_PROFILE.about_text;
+  const social = {
+    instagram: profile.social_instagram || '#',
+    facebook: profile.social_facebook || '#',
+    tiktok: profile.social_tiktok || '#',
+    twitter: profile.social_twitter || '#'
+  };
 
   return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', color: '#e8e0d4' }}>
@@ -68,9 +98,18 @@ export default function Public() {
 
       {/* NAV */}
       <nav style={{ padding: '24px 48px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1a1a14' }}>
-        <div>
-          <div style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '6px', textTransform: 'uppercase' }}>{SALON_NAME}</div>
-          <div style={{ fontFamily: 'Montserrat', fontSize: '9px', letterSpacing: '4px', color: '#c9a96e', marginTop: '2px' }}>{TAGLINE}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {profile.logo_url ? (
+            <img
+              src={profile.logo_url}
+              alt={`${businessName} logo`}
+              style={{ width: '44px', height: '44px', objectFit: 'cover', borderRadius: '50%', border: '1px solid #2a2a22' }}
+            />
+          ) : null}
+          <div>
+            <div style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '6px', textTransform: 'uppercase' }}>{businessName}</div>
+            <div style={{ fontFamily: 'Montserrat', fontSize: '9px', letterSpacing: '4px', color: '#c9a96e', marginTop: '2px' }}>{tagline}</div>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '36px' }}>
           <a className={view === 'home' ? 'active' : ''} onClick={() => setView('home')}>Services</a>
@@ -87,7 +126,7 @@ export default function Public() {
               Crafted for<br /><em>your story</em>
             </h1>
             <p className="mono" style={{ fontSize: '13px', color: '#888', lineHeight: 1.8, maxWidth: '480px', marginBottom: '40px' }}>
-              Every appointment is a conversation. We listen, we create, we transform — with precision and care that lasts beyond the chair.
+              {aboutText}
             </p>
             <button className="btn-primary" onClick={() => setView('book')}>Book an Appointment</button>
           </div>
@@ -243,9 +282,16 @@ export default function Public() {
       {/* FOOTER */}
       <div style={{ borderTop: '1px solid #1a1a14', padding: '32px 48px', display: 'grid', gap: '18px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div className="mono" style={{ fontSize: '10px', color: '#444', letterSpacing: '2px' }}>{SALON_NAME.toUpperCase()} © 2026</div>
+          <div className="mono" style={{ fontSize: '10px', color: '#444', letterSpacing: '2px' }}>{businessName.toUpperCase()} © 2026</div>
           <div className="mono" style={{ fontSize: '10px', color: '#444', letterSpacing: '2px' }}>POWERED BY NITE</div>
         </div>
+        {(profile.contact_email || profile.contact_phone || profile.contact_address) && (
+          <div className="mono" style={{ fontSize: '10px', color: '#666', letterSpacing: '1px', display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+            {profile.contact_email && <span>{profile.contact_email}</span>}
+            {profile.contact_phone && <span>{profile.contact_phone}</span>}
+            {profile.contact_address && <span>{profile.contact_address}</span>}
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '18px' }}>
           <div style={{ display: 'flex', gap: '18px' }}>
             <a className="mono" href="/terms" style={{ fontSize: '10px', letterSpacing: '2px' }}>Terms</a>
@@ -253,10 +299,10 @@ export default function Public() {
             <a className="mono" href="/contact" style={{ fontSize: '10px', letterSpacing: '2px' }}>Contact</a>
           </div>
           <div style={{ display: 'flex', gap: '18px' }}>
-            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>Instagram</a>
-            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>Facebook</a>
-            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>TikTok</a>
-            <a className="mono" href="#" style={{ fontSize: '10px', letterSpacing: '2px' }}>Twitter</a>
+            <a className="mono" href={social.instagram} style={{ fontSize: '10px', letterSpacing: '2px' }}>Instagram</a>
+            <a className="mono" href={social.facebook} style={{ fontSize: '10px', letterSpacing: '2px' }}>Facebook</a>
+            <a className="mono" href={social.tiktok} style={{ fontSize: '10px', letterSpacing: '2px' }}>TikTok</a>
+            <a className="mono" href={social.twitter} style={{ fontSize: '10px', letterSpacing: '2px' }}>Twitter</a>
           </div>
         </div>
       </div>

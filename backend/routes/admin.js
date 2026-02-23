@@ -22,6 +22,32 @@ function mapAppStatusToBuildStatus(appStatus) {
   return 'idle';
 }
 
+function slugifyBusinessName(name) {
+  const base = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return base || `biz-${Date.now()}`;
+}
+
+async function generateUniqueSubdomain(supabase, businessName) {
+  const reserved = new Set(['www', 'admin', 'dashboard', 'start', 'api']);
+  const raw = slugifyBusinessName(businessName);
+  const base = reserved.has(raw) ? `${raw}-site` : raw;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
+    const lookup = await supabase
+      .from('customers')
+      .select('id')
+      .eq('subdomain', candidate)
+      .limit(1);
+    if (lookup.error) throw lookup.error;
+    if (!Array.isArray(lookup.data) || lookup.data.length === 0) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+}
+
 // Get all customers
 router.get('/customers', async (req, res) => {
   try {
@@ -38,6 +64,35 @@ router.get('/customers', async (req, res) => {
   }
 });
 
+router.patch('/customers/:id/routing', async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const { container_url } = req.body || {};
+    let normalizedContainerUrl = null;
+    if (container_url) {
+      try {
+        const parsed = new URL(String(container_url).trim());
+        normalizedContainerUrl = parsed.origin;
+      } catch {
+        return res.status(400).json({ error: 'container_url must be a valid URL' });
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('customers')
+      .update({ container_url: normalizedContainerUrl })
+      .eq('id', req.params.id)
+      .select('*')
+      .single();
+    if (error) throw error;
+    res.json({ success: true, customer: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create customer from intake
 router.post('/customers', async (req, res) => {
   try {
@@ -47,7 +102,7 @@ router.post('/customers', async (req, res) => {
     if (!business_name || !owner_email) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-    const subdomain = business_name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+    const subdomain = await generateUniqueSubdomain(supabase, business_name);
     const { data, error } = await supabase
       .from('customers')
       .insert({

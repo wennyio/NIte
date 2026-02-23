@@ -8,10 +8,37 @@ const { runMigrations } = require('./db/migrate');
 const { getSupabaseClient } = require('./modules/supabase');
 const { getLiveAppFiles } = require('./modules/live-app');
 const { restoreCompiledFilesToDisk } = require('./modules/restore-generated');
+const { resolveTenantForRequest, getContainerRedirectUrl } = require('./modules/tenant');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+app.use(async (req, res, next) => {
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      req.tenant = null;
+      req.tenantContext = { host: req.headers.host || '', subdomain: null, customer: null, source: 'supabase-unavailable' };
+      return next();
+    }
+
+    const tenantContext = await resolveTenantForRequest(supabase, req);
+    req.tenantContext = tenantContext;
+    req.tenant = tenantContext.customer || null;
+
+    const redirectUrl = getContainerRedirectUrl(req, req.tenant);
+    if (redirectUrl) {
+      return res.redirect(307, redirectUrl);
+    }
+    return next();
+  } catch (err) {
+    console.error('Tenant resolution middleware error:', err.message);
+    req.tenant = null;
+    req.tenantContext = { host: req.headers.host || '', subdomain: null, customer: null, source: 'error' };
+    return next();
+  }
+});
 
 app.get('/health', checkHealth);
 app.get('/admin/ping', (req, res) => res.json({ ping: 'pong' }));
@@ -32,9 +59,18 @@ app.use('/api', (req, res, next) => {
 app.use(express.static(path.join(__dirname, '../frontend/nite-dist'), { index: false }));
 
 // Nite platform routes
-app.get('/start*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
-app.get('/admin*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
-app.get('/dashboard*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
+app.get('/start*', (req, res, next) => {
+  if (req.tenant) return next();
+  return res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html'));
+});
+app.get('/admin*', (req, res, next) => {
+  if (req.tenant) return next();
+  return res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html'));
+});
+app.get('/dashboard*', (req, res, next) => {
+  if (req.tenant) return next();
+  return res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html'));
+});
 
 // Generated app
 app.use(express.static(path.join(__dirname, '../frontend/dist'), { index: false }));

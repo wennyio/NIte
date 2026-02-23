@@ -12,6 +12,9 @@ export default function CommandCenter() {
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(false);
   const [settingLiveId, setSettingLiveId] = useState('');
+  const [routingDrafts, setRoutingDrafts] = useState({});
+  const [routingBusyId, setRoutingBusyId] = useState('');
+  const [routingMessage, setRoutingMessage] = useState('');
 
   const login = (e) => {
     e.preventDefault();
@@ -40,7 +43,13 @@ export default function CommandCenter() {
         axios.get('/admin/customers'),
         axios.get('/admin/build-status')
       ]);
-      setCustomers(custRes.data || []);
+      const list = custRes.data || [];
+      setCustomers(list);
+      const drafts = {};
+      (Array.isArray(list) ? list : []).forEach((c) => {
+        drafts[c.id] = c.container_url || '';
+      });
+      setRoutingDrafts(drafts);
       setBuilds(buildRes.data);
     } catch (err) {
       console.error(err);
@@ -58,6 +67,23 @@ export default function CommandCenter() {
       console.error(err);
     }
     setSettingLiveId('');
+  };
+
+  const saveRouting = async (customerId) => {
+    if (!customerId) return;
+    setRoutingBusyId(customerId);
+    setRoutingMessage('');
+    try {
+      await axios.patch(`/admin/customers/${customerId}/routing`, {
+        container_url: (routingDrafts[customerId] || '').trim()
+      });
+      setRoutingMessage('Routing updated.');
+      await fetchData();
+    } catch (err) {
+      const msg = err?.response?.data?.error || 'Failed to update routing.';
+      setRoutingMessage(msg);
+    }
+    setRoutingBusyId('');
   };
 
   const tierColor = (tier) => ({
@@ -225,11 +251,14 @@ export default function CommandCenter() {
             <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: '10px', letterSpacing: '3px', color: '#555' }}>ALL CUSTOMERS — {customers.length} TOTAL</div>
             </div>
+            {routingMessage && (
+              <div style={{ marginBottom: '14px', fontSize: '11px', color: '#c9a96e', letterSpacing: '1px' }}>{routingMessage}</div>
+            )}
             <table>
-              <thead><tr><th>Business</th><th>Type</th><th>Owner</th><th>Email</th><th>Tier</th><th>Status</th><th>Subdomain</th><th>Created</th></tr></thead>
+              <thead><tr><th>Business</th><th>Type</th><th>Owner</th><th>Email</th><th>Tier</th><th>Status</th><th>Subdomain</th><th>Routing</th><th>Created</th></tr></thead>
               <tbody>
                 {customers.length === 0 && (
-                  <tr><td colSpan={8} style={{ color: '#333', fontStyle: 'italic', textAlign: 'center', padding: '40px' }}>No customers yet</td></tr>
+                  <tr><td colSpan={9} style={{ color: '#333', fontStyle: 'italic', textAlign: 'center', padding: '40px' }}>No customers yet</td></tr>
                 )}
                 {customers.map(c => (
                   <tr key={c.id}>
@@ -240,6 +269,23 @@ export default function CommandCenter() {
                     <td><span className="badge" style={{ color: tierColor(c.tier), border: `1px solid ${tierColor(c.tier)}44` }}>{c.tier?.toUpperCase() || 'STARTER'}</span></td>
                     <td><span className="badge" style={{ color: statusColor(c.status), border: `1px solid ${statusColor(c.status)}44` }}>{c.status?.toUpperCase() || 'ACTIVE'}</span></td>
                     <td style={{ fontSize: '12px', color: '#c9a96e' }}>{c.subdomain || '—'}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input
+                          value={routingDrafts[c.id] || ''}
+                          onChange={(e) => setRoutingDrafts(prev => ({ ...prev, [c.id]: e.target.value }))}
+                          placeholder="https://customer-app.example.com"
+                          style={{ background: '#12120e', border: '1px solid #2a2a22', color: '#e8e0d4', padding: '6px 8px', fontSize: '11px', width: '240px', fontFamily: 'Montserrat' }}
+                        />
+                        <button
+                          onClick={() => saveRouting(c.id)}
+                          disabled={routingBusyId === c.id}
+                          style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#c9a96e', fontSize: '9px', letterSpacing: '1px', padding: '5px 8px', cursor: 'pointer', opacity: routingBusyId === c.id ? 0.6 : 1 }}
+                        >
+                          {routingBusyId === c.id ? 'SAVING...' : 'SAVE'}
+                        </button>
+                      </div>
+                    </td>
                     <td style={{ fontSize: '11px', color: '#555' }}>{c.created_at?.split('T')[0] || '—'}</td>
                   </tr>
                 ))}

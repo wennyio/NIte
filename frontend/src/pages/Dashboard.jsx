@@ -115,6 +115,13 @@ export default function Dashboard() {
   const [serviceEdits, setServiceEdits] = useState({});
   const [serviceBusy, setServiceBusy] = useState(false);
   const [serviceMessage, setServiceMessage] = useState('');
+  const [legalContent, setLegalContent] = useState({
+    terms: { title: '', content: '' },
+    privacy: { title: '', content: '' },
+    contact: { title: '', content: '' }
+  });
+  const [legalBusyKey, setLegalBusyKey] = useState('');
+  const [legalMessage, setLegalMessage] = useState('');
 
   const api = (url, opts = {}) => axios({ url, ...opts, headers: { Authorization: `Bearer ${token}`, ...opts.headers } });
 
@@ -172,6 +179,14 @@ export default function Dashboard() {
         const list = Array.isArray(r.data) ? r.data : [];
         setServices(list);
         hydrateServiceEdits(list);
+      } else if (t === 'legal') {
+        const r = await api('/api/dashboard/legal-content');
+        const pages = r?.data?.pages || {};
+        setLegalContent({
+          terms: pages.terms || { title: 'Terms of Service', content: '' },
+          privacy: pages.privacy || { title: 'Privacy Policy', content: '' },
+          contact: pages.contact || { title: 'Contact Us', content: '' }
+        });
       } else if (t === 'revenue') {
         const r = await api('/api/dashboard/revenue');
         setRevenue(r.data);
@@ -270,6 +285,39 @@ export default function Dashboard() {
     setServiceBusy(false);
   };
 
+  const updateLegalDraft = (key, field, value) => {
+    setLegalContent(prev => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || {}),
+        [field]: value
+      }
+    }));
+  };
+
+  const saveLegalPage = async (key) => {
+    const draft = legalContent[key];
+    if (!draft || !draft.title?.trim() || !draft.content?.trim()) {
+      setLegalMessage('Title and content are required.');
+      return;
+    }
+    setLegalBusyKey(key);
+    setLegalMessage('');
+    try {
+      await api(`/api/dashboard/legal-content/${key}`, {
+        method: 'PATCH',
+        data: {
+          title: draft.title.trim(),
+          content: draft.content
+        }
+      });
+      setLegalMessage(`Saved ${key} page.`);
+    } catch {
+      setLegalMessage(`Failed to save ${key} page.`);
+    }
+    setLegalBusyKey('');
+  };
+
   if (!token) return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e8e0d4' }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400&family=Montserrat:wght@300;400;500&display=swap'); * { box-sizing:border-box; } input { background:#12120e; border:1px solid #2a2a22; color:#e8e0d4; padding:12px 16px; font-family:'Montserrat',sans-serif; font-size:13px; width:100%; outline:none; transition:border 0.2s; } input:focus { border-color:#c9a96e; } .mono { font-family:'Montserrat',sans-serif; }`}</style>
@@ -288,7 +336,7 @@ export default function Dashboard() {
     </div>
   );
 
-  const tabs = ['appointments', 'clients', 'staff', 'services', 'revenue'];
+  const tabs = ['appointments', 'clients', 'staff', 'services', 'legal', 'revenue'];
 
   return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', color: '#e8e0d4' }}>
@@ -510,6 +558,47 @@ export default function Dashboard() {
                 </tbody>
               </table>
             )}
+          </div>
+        )}
+
+        {/* LEGAL */}
+        {tab === 'legal' && (
+          <div>
+            {legalMessage && (
+              <div className="mono" style={{ fontSize: '11px', color: '#c9a96e', marginBottom: '14px', letterSpacing: '1px' }}>
+                {legalMessage}
+              </div>
+            )}
+            <div style={{ display: 'grid', gap: '14px' }}>
+              {['terms', 'privacy', 'contact'].map((key) => {
+                const draft = legalContent[key] || { title: '', content: '' };
+                return (
+                  <div key={key} style={{ border: '1px solid #1a1a14', padding: '16px' }}>
+                    <div className="mono" style={{ fontSize: '10px', color: '#888', letterSpacing: '2px', marginBottom: '8px' }}>{key.toUpperCase()} PAGE</div>
+                    <input
+                      placeholder="Page title"
+                      value={draft.title || ''}
+                      onChange={(e) => updateLegalDraft(key, 'title', e.target.value)}
+                      style={{ marginBottom: '10px' }}
+                    />
+                    <textarea
+                      value={draft.content || ''}
+                      onChange={(e) => updateLegalDraft(key, 'content', e.target.value)}
+                      style={{ minHeight: '150px', width: '100%', background: '#12120e', border: '1px solid #1e1e18', color: '#e8e0d4', padding: '12px 14px', fontFamily: 'Montserrat', fontSize: '12px', outline: 'none', resize: 'vertical' }}
+                    />
+                    <div style={{ marginTop: '10px' }}>
+                      <button
+                        onClick={() => saveLegalPage(key)}
+                        disabled={legalBusyKey === key}
+                        style={{ background: '#c9a96e', color: '#0a0a08', border: 'none', padding: '8px 16px', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '2px', cursor: 'pointer', opacity: legalBusyKey === key ? 0.6 : 1 }}
+                      >
+                        {legalBusyKey === key ? 'SAVING...' : `SAVE ${key.toUpperCase()}`}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

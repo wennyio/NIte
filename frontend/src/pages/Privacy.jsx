@@ -2,11 +2,17 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 
+const DEFAULT_PRIVACY_PAGE = {
+  title: 'Privacy Policy',
+  content: [
+    'This page describes what customer information is collected and how it is used.',
+    'Replace this placeholder with your own data handling and retention policy.',
+    'Need help? Ask the site assistant to rewrite this page to match your business.'
+  ].join('\n\n')
+};
+
 export default function Privacy() {
-  const [page, setPage] = useState({
-    title: 'Privacy Policy',
-    content: 'Loading privacy policy...'
-  });
+  const [page, setPage] = useState(DEFAULT_PRIVACY_PAGE);
 
   useEffect(() => {
     axios.get('/api/legal/privacy')
@@ -30,6 +36,9 @@ export default function Privacy() {
         </div>
         <div className="mono" style={{ fontSize: '10px', letterSpacing: '4px', color: '#b79367', marginBottom: '12px' }}>LEGAL</div>
         <h1 style={{ fontSize: '56px', fontWeight: 300, marginBottom: '24px' }}>{page.title}</h1>
+        <div className="mono" style={{ fontSize: '10px', letterSpacing: '1px', color: '#9b8a78', marginBottom: '14px' }}>
+          Owner tip: edit this page from Dashboard → Legal.
+        </div>
         <div style={{ background: '#fff', border: '1px solid #e6ddd2', padding: '20px 22px' }}>
           {String(page.content || '').split('\n').map((line, idx) => (
             <p key={idx} className="mono" style={{ color: '#6d6258', lineHeight: 1.8, marginBottom: line.trim() ? '10px' : '18px' }}>

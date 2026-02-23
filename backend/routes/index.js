@@ -59,15 +59,35 @@ async function getLiveCustomer(supabase) {
 
   const detailed = await supabase
     .from('customers')
-    .select('id, business_name, business_type, owner_name, owner_email, subdomain, app_status')
+    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
     .eq('id', liveCustomer.id)
     .maybeSingle();
   if (detailed.error) return liveCustomer;
   return detailed.data || liveCustomer;
 }
 
-async function getLiveCustomerId(supabase) {
-  const liveCustomer = await getLiveCustomer(supabase);
+async function getCustomerById(supabase, customerId) {
+  if (!customerId) return null;
+  const detailed = await supabase
+    .from('customers')
+    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+    .eq('id', customerId)
+    .maybeSingle();
+  if (detailed.error) return null;
+  return detailed.data || null;
+}
+
+async function getContextCustomer(supabase, req) {
+  const tenantCustomerId = req?.tenant?.id || null;
+  if (tenantCustomerId) {
+    const tenantCustomer = await getCustomerById(supabase, tenantCustomerId);
+    if (tenantCustomer?.id) return tenantCustomer;
+  }
+  return getLiveCustomer(supabase);
+}
+
+async function getLiveCustomerId(supabase, req) {
+  const liveCustomer = await getContextCustomer(supabase, req);
   return liveCustomer?.id || null;
 }
 
@@ -203,20 +223,20 @@ router.post('/book', async (req, res) => {
       staff_id: staff_id || null, service_id: selectedServiceId, appointment_date, appointment_time, notes, status: 'pending'
     }).select('*').single();
     if (error) throw error;
+    const contextCustomer = await getContextCustomer(supabase, req);
     res.status(201).json(data);
 
     // Booking confirmation emails are best-effort and should not block booking creation.
     setImmediate(async () => {
       try {
         if (!isResendConfigured()) return;
-        const liveCustomer = await getLiveCustomer(supabase);
-        const profile = await getBusinessProfile(supabase, liveCustomer);
+        const profile = await getBusinessProfile(supabase, contextCustomer);
         if (profile.booking_confirmation_enabled === false) return;
 
         const catalog = await fetchCatalog(supabase);
         const selectedService = (Array.isArray(catalog) ? catalog : []).find((item) => String(item.id) === String(selectedServiceId));
-        const businessName = profile.display_name || liveCustomer?.business_name || 'Your Business';
-        const ownerEmail = profile.contact_email || liveCustomer?.owner_email || null;
+        const businessName = profile.display_name || contextCustomer?.business_name || 'Your Business';
+        const ownerEmail = profile.contact_email || contextCustomer?.owner_email || null;
         const serviceName = selectedService?.name || 'Selected service';
 
         const emailResult = await sendBookingEmails({
@@ -315,7 +335,7 @@ router.get('/legal/:pageKey', async (req, res) => {
   }
 
   try {
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     const page = await getLegalPage(supabase, customerId, pageKey);
     res.json({ ...page, customer_id: customerId || null, fallback: false });
   } catch (err) {
@@ -336,16 +356,16 @@ router.get('/business-profile', async (req, res) => {
   }
 
   try {
-    const liveCustomer = await getLiveCustomer(supabase);
-    const profile = await getBusinessProfile(supabase, liveCustomer);
+    const contextCustomer = await getContextCustomer(supabase, req);
+    const profile = await getBusinessProfile(supabase, contextCustomer);
     res.json({
-      customer_id: liveCustomer?.id || null,
+      customer_id: contextCustomer?.id || null,
       profile,
-      customer: liveCustomer
+      customer: contextCustomer
         ? {
-            id: liveCustomer.id,
-            business_name: liveCustomer.business_name || null,
-            subdomain: liveCustomer.subdomain || null
+            id: contextCustomer.id,
+            business_name: contextCustomer.business_name || null,
+            subdomain: contextCustomer.subdomain || null
           }
         : null,
       fallback: false
@@ -357,6 +377,35 @@ router.get('/business-profile', async (req, res) => {
       profile: getDefaultBusinessProfile(null),
       fallback: true
     });
+  }
+});
+
+router.get('/tenant-context', async (req, res) => {
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return res.json({
+        host: req.tenantContext?.host || req.headers.host || null,
+        subdomain: req.tenantContext?.subdomain || null,
+        source: req.tenantContext?.source || 'supabase-unavailable',
+        tenantCustomer: req.tenant || null,
+        liveCustomer: null,
+        resolvedCustomer: null
+      });
+    }
+
+    const liveCustomer = await getLiveCustomer(supabase);
+    const resolvedCustomer = await getContextCustomer(supabase, req);
+    res.json({
+      host: req.tenantContext?.host || req.headers.host || null,
+      subdomain: req.tenantContext?.subdomain || null,
+      source: req.tenantContext?.source || 'none',
+      tenantCustomer: req.tenant || null,
+      liveCustomer: liveCustomer || null,
+      resolvedCustomer: resolvedCustomer || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -526,14 +575,14 @@ router.get('/dashboard/settings', verifyToken, async (req, res) => {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
 
-    const liveCustomer = await getLiveCustomer(supabase);
-    if (!liveCustomer?.id) {
+    const contextCustomer = await getContextCustomer(supabase, req);
+    if (!contextCustomer?.id) {
       return res.status(400).json({ error: 'No live customer selected' });
     }
 
-    const profile = await getBusinessProfile(supabase, liveCustomer);
+    const profile = await getBusinessProfile(supabase, contextCustomer);
     res.json({
-      customer: liveCustomer,
+      customer: contextCustomer,
       profile
     });
   } catch (err) {
@@ -546,8 +595,8 @@ router.patch('/dashboard/settings', verifyToken, async (req, res) => {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
 
-    const liveCustomer = await getLiveCustomer(supabase);
-    if (!liveCustomer?.id) {
+    const contextCustomer = await getContextCustomer(supabase, req);
+    if (!contextCustomer?.id) {
       return res.status(400).json({ error: 'No live customer selected' });
     }
 
@@ -561,13 +610,13 @@ router.patch('/dashboard/settings', verifyToken, async (req, res) => {
     if (body.owner_name !== undefined) customerPatch.owner_name = String(body.owner_name || '').trim();
     if (body.owner_email !== undefined) customerPatch.owner_email = String(body.owner_email || '').trim();
 
-    let updatedCustomer = liveCustomer;
+    let updatedCustomer = contextCustomer;
     if (Object.keys(customerPatch).length > 0) {
       const customerUpdate = await supabase
         .from('customers')
         .update(customerPatch)
-        .eq('id', liveCustomer.id)
-        .select('id, business_name, business_type, owner_name, owner_email, subdomain, app_status')
+        .eq('id', contextCustomer.id)
+        .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
         .single();
       if (customerUpdate.error) throw customerUpdate.error;
       updatedCustomer = customerUpdate.data;
@@ -604,7 +653,7 @@ router.get('/dashboard/legal-content', verifyToken, async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     if (!customerId) {
       return res.status(400).json({ error: 'No live customer selected' });
     }
@@ -628,7 +677,7 @@ router.patch('/dashboard/legal-content/:pageKey', verifyToken, async (req, res) 
     const pageKey = normalizePageKey(req.params.pageKey);
     if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
 
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     if (!customerId) {
       return res.status(400).json({ error: 'No live customer selected' });
     }
@@ -647,7 +696,7 @@ router.post('/dashboard/legal-content/:pageKey/restore', verifyToken, async (req
     const pageKey = normalizePageKey(req.params.pageKey);
     if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
 
-    const customerId = await getLiveCustomerId(supabase);
+    const customerId = await getLiveCustomerId(supabase, req);
     if (!customerId) {
       return res.status(400).json({ error: 'No live customer selected' });
     }

@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const { checkHealth } = require('./modules/health');
 const { runMigrations } = require('./db/migrate');
 const { getSupabaseClient } = require('./modules/supabase');
@@ -38,7 +39,10 @@ app.get('/dashboard*', (req, res) => res.sendFile(path.join(__dirname, '../front
 // Generated app
 app.use(express.static(path.join(__dirname, '../frontend/dist'), { index: false }));
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+  const generatedIndex = path.join(__dirname, '../frontend/dist/index.html');
+  const niteIndex = path.join(__dirname, '../frontend/nite-dist/index.html');
+  const target = fs.existsSync(generatedIndex) ? generatedIndex : niteIndex;
+  res.sendFile(target);
 });
 
 async function restoreFromSupabase() {

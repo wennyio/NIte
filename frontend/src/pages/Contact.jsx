@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 
@@ -6,6 +6,18 @@ export default function Contact() {
   const [form, setForm] = useState({ name: '', email: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('');
+  const [page, setPage] = useState({
+    title: 'Contact Us',
+    content: 'Use this page to share how customers can contact your business.'
+  });
+
+  useEffect(() => {
+    axios.get('/api/legal/contact')
+      .then((r) => {
+        if (r?.data?.title && r?.data?.content) setPage(r.data);
+      })
+      .catch(() => {});
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -46,10 +58,14 @@ export default function Contact() {
           <Link to="/" className="mono" style={{ fontSize: '11px', letterSpacing: '2px' }}>← BACK TO SITE</Link>
         </div>
         <div className="mono" style={{ fontSize: '10px', letterSpacing: '4px', color: '#b79367', marginBottom: '12px' }}>CONNECT</div>
-        <h1 style={{ fontSize: '56px', fontWeight: 300, marginBottom: '14px' }}>Contact Us</h1>
-        <p className="mono" style={{ color: '#6d6258', lineHeight: 1.8, marginBottom: '28px' }}>
-          Ask questions, request details, or send a message to the team. You can customize this page content anytime.
-        </p>
+        <h1 style={{ fontSize: '56px', fontWeight: 300, marginBottom: '14px' }}>{page.title}</h1>
+        <div style={{ marginBottom: '24px' }}>
+          {String(page.content || '').split('\n').map((line, idx) => (
+            <p key={idx} className="mono" style={{ color: '#6d6258', lineHeight: 1.8, marginBottom: line.trim() ? '10px' : '18px' }}>
+              {line || '\u00A0'}
+            </p>
+          ))}
+        </div>
         <form onSubmit={submit} style={{ display: 'grid', gap: '12px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <input required placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />

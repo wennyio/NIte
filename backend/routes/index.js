@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { verifyToken, generateToken } = require('../modules/auth');
 const { getSupabaseClient } = require('../modules/supabase');
+const { getLatestLiveCustomer } = require('../modules/live-app');
 const {
   isMissingTableError,
   listCatalog,
@@ -9,6 +10,12 @@ const {
   updateCatalogItem,
   deactivateCatalogItem
 } = require('../modules/catalog');
+const {
+  normalizePageKey,
+  getLegalPage,
+  listLegalPages,
+  upsertLegalPage
+} = require('../modules/legal-content');
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -36,6 +43,11 @@ async function fetchCatalog(supabase) {
     if (!isMissingTableError(err)) throw err;
   }
   return CATALOG_FALLBACK;
+}
+
+async function getLiveCustomerId(supabase) {
+  const liveCustomer = await getLatestLiveCustomer(supabase);
+  return liveCustomer?.id || null;
 }
 
 // AUTH - Login
@@ -238,6 +250,21 @@ router.post('/contact', async (req, res) => {
   }
 });
 
+router.get('/legal/:pageKey', async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+    const pageKey = normalizePageKey(req.params.pageKey);
+    if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
+
+    const customerId = await getLiveCustomerId(supabase);
+    const page = await getLegalPage(supabase, customerId, pageKey);
+    res.json({ ...page, customer_id: customerId || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DASHBOARD - Appointments
 router.get('/dashboard/appointments', verifyToken, async (req, res) => {
   try {
@@ -394,6 +421,46 @@ router.delete('/dashboard/services/:id', verifyToken, async (req, res) => {
     if (!supabase) return;
     const { item, mode } = await deactivateCatalogItem(supabase, req.params.id);
     res.json({ success: true, mode, item });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/dashboard/legal-content', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+    const customerId = await getLiveCustomerId(supabase);
+    if (!customerId) {
+      return res.status(400).json({ error: 'No live customer selected' });
+    }
+
+    const pages = await listLegalPages(supabase, customerId);
+    const byKey = {};
+    (Array.isArray(pages) ? pages : []).forEach((page) => {
+      if (page?.page_key) byKey[page.page_key] = page;
+    });
+
+    res.json({ customer_id: customerId, pages: byKey });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/dashboard/legal-content/:pageKey', verifyToken, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+    const pageKey = normalizePageKey(req.params.pageKey);
+    if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
+
+    const customerId = await getLiveCustomerId(supabase);
+    if (!customerId) {
+      return res.status(400).json({ error: 'No live customer selected' });
+    }
+
+    const updated = await upsertLegalPage(supabase, customerId, pageKey, req.body || {});
+    res.json({ success: true, page: updated, customer_id: customerId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

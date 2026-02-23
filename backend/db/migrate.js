@@ -35,6 +35,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS generated_apps_customer_path_unique
 CREATE INDEX IF NOT EXISTS generated_apps_customer_file_type_idx
   ON generated_apps (customer_id, file_type);
 
+CREATE TABLE IF NOT EXISTS legal_pages (
+  id BIGSERIAL PRIMARY KEY,
+  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  page_key TEXT NOT NULL CHECK (page_key IN ('terms', 'privacy', 'contact')),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(customer_id, page_key)
+);
+
 CREATE TABLE IF NOT EXISTS nite_schema_migrations (
   name TEXT PRIMARY KEY,
   checksum TEXT NOT NULL,

@@ -1,5 +1,5 @@
 const { generateApp } = require('./generate');
-const { createClient } = require('@supabase/supabase-js');
+const { getSupabaseClient } = require('../modules/supabase');
 const { randomUUID } = require('crypto');
 
 let buildStatus = { status: 'idle', queueDepth: 0 };
@@ -8,42 +8,44 @@ let activeBuild = null;
 let isProcessing = false;
 
 function getSupabase() {
-  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+  return getSupabaseClient();
 }
 
 async function updateCustomerAppStatus(customerId, appStatus) {
-  if (!customerId) return;
-  try {
-    const supabase = getSupabase();
-    const { error } = await supabase
-      .from('customers')
-      .update({ app_status: appStatus })
-      .eq('id', customerId);
-    if (error) {
-      console.error(`Failed to update customer ${customerId} app_status to ${appStatus}:`, error.message);
-    }
-  } catch (err) {
-    console.error(`Error updating customer ${customerId} app_status to ${appStatus}:`, err.message);
+  if (!customerId) return { updated: false, reason: 'missing-customer-id' };
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Supabase is not configured');
+
+  const { data, error } = await supabase
+    .from('customers')
+    .update({ app_status: appStatus })
+    .eq('id', customerId)
+    .select('id')
+    .maybeSingle();
+  if (error) {
+    throw new Error(`Failed to update customer ${customerId} app_status to ${appStatus}: ${error.message}`);
   }
+  if (!data?.id) {
+    throw new Error(`Customer ${customerId} not found while setting app_status ${appStatus}`);
+  }
+  return { updated: true };
 }
 
 async function promoteCustomerToLive(customerId) {
-  if (!customerId) return;
-  try {
-    const supabase = getSupabase();
-    const demote = await supabase
-      .from('customers')
-      .update({ app_status: 'pending' })
-      .eq('app_status', 'live')
-      .neq('id', customerId);
-    if (demote.error) {
-      console.error(`Failed to demote previous live customer(s):`, demote.error.message);
-    }
+  if (!customerId) throw new Error('Missing customerId for live promotion');
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Supabase is not configured');
 
-    await updateCustomerAppStatus(customerId, 'live');
-  } catch (err) {
-    console.error(`Error promoting customer ${customerId} to live:`, err.message);
+  const demote = await supabase
+    .from('customers')
+    .update({ app_status: 'pending' })
+    .eq('app_status', 'live')
+    .neq('id', customerId);
+  if (demote.error) {
+    throw new Error(`Failed to demote previous live customer(s): ${demote.error.message}`);
   }
+
+  await updateCustomerAppStatus(customerId, 'live');
 }
 
 function refreshBuildStatus(partial = {}) {
@@ -66,7 +68,11 @@ async function orchestrate(businessContext, customerId) {
   buildQueue.push(job);
 
   const nextStatus = activeBuild || isProcessing ? 'queued' : 'generating';
-  await updateCustomerAppStatus(job.customerId, nextStatus);
+  try {
+    await updateCustomerAppStatus(job.customerId, nextStatus);
+  } catch (statusErr) {
+    console.error(statusErr.message);
+  }
   refreshBuildStatus({
     status: nextStatus,
     buildId: job.buildId,
@@ -105,7 +111,11 @@ async function processQueue() {
         startedAt: new Date().toISOString(),
         error: null
       });
-      await updateCustomerAppStatus(job.customerId, 'generating');
+      try {
+        await updateCustomerAppStatus(job.customerId, 'generating');
+      } catch (statusErr) {
+        console.error(statusErr.message);
+      }
 
       const files = await generateApp(job.businessContext, job.customerId);
       await promoteCustomerToLive(job.customerId);
@@ -120,7 +130,11 @@ async function processQueue() {
       console.log(`Build complete: ${files.length} files generated and saved`);
     } catch (error) {
       console.error('Build error:', error.message);
-      await updateCustomerAppStatus(job.customerId, 'error');
+      try {
+        await updateCustomerAppStatus(job.customerId, 'error');
+      } catch (statusErr) {
+        console.error(statusErr.message);
+      }
       refreshBuildStatus({
         status: 'error',
         buildId: job.buildId,

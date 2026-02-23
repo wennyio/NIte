@@ -252,17 +252,23 @@ router.post('/contact', async (req, res) => {
 });
 
 router.get('/legal/:pageKey', async (req, res) => {
-  try {
-    const supabase = getSupabaseOr503(res);
-    if (!supabase) return;
-    const pageKey = normalizePageKey(req.params.pageKey);
-    if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
+  const pageKey = normalizePageKey(req.params.pageKey);
+  if (!pageKey) return res.status(400).json({ error: 'Invalid legal page key' });
 
+  const defaultPage = getDefaultLegalPage(pageKey);
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return res.json({ ...defaultPage, customer_id: null, fallback: true });
+  }
+
+  try {
     const customerId = await getLiveCustomerId(supabase);
     const page = await getLegalPage(supabase, customerId, pageKey);
-    res.json({ ...page, customer_id: customerId || null });
+    res.json({ ...page, customer_id: customerId || null, fallback: false });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // Legal pages should always render. If DB or table lookup fails, serve defaults.
+    console.error('Failed to load legal page from DB, using defaults:', err.message);
+    res.json({ ...defaultPage, customer_id: null, fallback: true });
   }
 });
 

@@ -2,14 +2,20 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 
+const DEFAULT_CONTACT_PAGE = {
+  title: 'Contact Us',
+  content: [
+    'Use this page to share how customers can contact your business.',
+    'Replace this text with your preferred response times, support email, and phone details.',
+    'Need help? Ask the site assistant to rewrite this page with your business voice.'
+  ].join('\n\n')
+};
+
 export default function Contact() {
   const [form, setForm] = useState({ name: '', email: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('');
-  const [page, setPage] = useState({
-    title: 'Contact Us',
-    content: 'Use this page to share how customers can contact your business.'
-  });
+  const [page, setPage] = useState(DEFAULT_CONTACT_PAGE);
 
   useEffect(() => {
     axios.get('/api/legal/contact')
@@ -59,6 +65,9 @@ export default function Contact() {
         </div>
         <div className="mono" style={{ fontSize: '10px', letterSpacing: '4px', color: '#b79367', marginBottom: '12px' }}>CONNECT</div>
         <h1 style={{ fontSize: '56px', fontWeight: 300, marginBottom: '14px' }}>{page.title}</h1>
+        <div className="mono" style={{ fontSize: '10px', letterSpacing: '1px', color: '#9b8a78', marginBottom: '14px' }}>
+          Owner tip: edit this page from Dashboard → Legal.
+        </div>
         <div style={{ marginBottom: '24px' }}>
           {String(page.content || '').split('\n').map((line, idx) => (
             <p key={idx} className="mono" style={{ color: '#6d6258', lineHeight: 1.8, marginBottom: line.trim() ? '10px' : '18px' }}>

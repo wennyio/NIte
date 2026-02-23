@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS business_profiles (
 CREATE INDEX IF NOT EXISTS business_profiles_customer_idx
   ON business_profiles (customer_id);
 
+CREATE TABLE IF NOT EXISTS admin_events (
+  id BIGSERIAL PRIMARY KEY,
+  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+  actor TEXT NOT NULL DEFAULT 'system',
+  event_type TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_events_created_idx
+  ON admin_events (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS admin_events_customer_created_idx
+  ON admin_events (customer_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS nite_schema_migrations (
   name TEXT PRIMARY KEY,
   checksum TEXT NOT NULL,
@@ -111,38 +127,31 @@ function normalizeDatabaseUrl(databaseUrl) {
   }
 }
 
-const runMigrations = async () => {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.log('DATABASE_URL not set. Skipping SQL migrations.');
-    return;
+function getDatabaseUrlCandidates() {
+  const urls = [
+    process.env.DATABASE_URL,
+    process.env.DATABASE_POOLER_URL,
+    process.env.SUPABASE_DATABASE_URL,
+    process.env.SUPABASE_DB_URL
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const unique = [];
+  const seen = new Set();
+  for (const value of urls) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
   }
+  return unique;
+}
 
-  // Prefer IPv4 first so platforms without IPv6 egress can still connect.
-  if (typeof dns.setDefaultResultOrder === 'function') {
-    dns.setDefaultResultOrder('ipv4first');
-  }
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const schemaPath = path.join(__dirname, 'schema.sql');
-  if (!fs.existsSync(schemaPath)) {
-    console.log('No schema, skipping');
-    return;
-  }
-
-  const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-  const schemaChecksum = checksum(schemaSql);
-  const migrationName = 'backend/db/schema.sql';
-
-  const sslMode = (process.env.PGSSLMODE || '').toLowerCase();
-  const normalizedDatabaseUrl = normalizeDatabaseUrl(databaseUrl);
-  const clientConfig = { connectionString: normalizedDatabaseUrl };
-  if (sslMode === 'disable') {
-    clientConfig.ssl = false;
-  } else if (sslMode === 'insecure') {
-    clientConfig.ssl = { rejectUnauthorized: false };
-  }
+async function runMigrationsWithClientConfig(clientConfig, schemaSql, schemaChecksum, migrationName) {
   const client = new Client(clientConfig);
-
   try {
     await client.connect();
     await client.query('BEGIN');
@@ -170,17 +179,87 @@ const runMigrations = async () => {
 
     await client.query('COMMIT');
     console.log('Migrations complete');
+    return { ok: true };
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch { }
-    if (isConnectivityError(err) && process.env.MIGRATIONS_STRICT !== 'true') {
-      console.error('Migration DB connectivity failed; continuing startup without SQL migration:', err.message);
-      return;
-    }
-    console.error('Migration failed:', err.message);
     throw err;
   } finally {
     try { await client.end(); } catch { }
   }
+}
+
+const runMigrations = async () => {
+  const databaseUrlCandidates = getDatabaseUrlCandidates();
+  if (databaseUrlCandidates.length === 0) {
+    console.log('No database migration URL configured (DATABASE_URL / DATABASE_POOLER_URL / SUPABASE_DATABASE_URL / SUPABASE_DB_URL). Skipping SQL migrations.');
+    return;
+  }
+
+  // Prefer IPv4 first so platforms without IPv6 egress can still connect.
+  if (typeof dns.setDefaultResultOrder === 'function') {
+    dns.setDefaultResultOrder('ipv4first');
+  }
+
+  const schemaPath = path.join(__dirname, 'schema.sql');
+  if (!fs.existsSync(schemaPath)) {
+    console.log('No schema, skipping');
+    return;
+  }
+
+  const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+  const schemaChecksum = checksum(schemaSql);
+  const migrationName = 'backend/db/schema.sql';
+
+  const sslMode = (process.env.PGSSLMODE || '').toLowerCase();
+  const maxConnectivityRetries = Number(process.env.MIGRATION_CONNECT_RETRIES || 3);
+  const retryLimit = Number.isFinite(maxConnectivityRetries) && maxConnectivityRetries > 0
+    ? maxConnectivityRetries
+    : 3;
+
+  let lastConnectivityError = null;
+  for (let idx = 0; idx < databaseUrlCandidates.length; idx++) {
+    const candidateUrl = normalizeDatabaseUrl(databaseUrlCandidates[idx]);
+    const clientConfig = { connectionString: candidateUrl };
+    if (sslMode === 'disable') {
+      clientConfig.ssl = false;
+    } else if (sslMode === 'insecure') {
+      clientConfig.ssl = { rejectUnauthorized: false };
+    }
+
+    for (let attempt = 1; attempt <= retryLimit; attempt++) {
+      try {
+        await runMigrationsWithClientConfig(clientConfig, schemaSql, schemaChecksum, migrationName);
+        return;
+      } catch (err) {
+        if (!isConnectivityError(err)) {
+          console.error('Migration failed:', err.message);
+          throw err;
+        }
+
+        lastConnectivityError = err;
+        const hasMoreAttempts = attempt < retryLimit;
+        const hasMoreUrls = idx < databaseUrlCandidates.length - 1;
+        if (hasMoreAttempts) {
+          const backoff = Math.min(2000 * Math.pow(2, attempt - 1), 8000);
+          console.warn(`Migration DB connectivity attempt ${attempt}/${retryLimit} failed; retrying in ${Math.round(backoff / 1000)}s: ${err.message}`);
+          await delay(backoff);
+          continue;
+        }
+        if (hasMoreUrls) {
+          console.warn(`Migration DB connectivity failed for DATABASE_URL candidate ${idx + 1}/${databaseUrlCandidates.length}; trying next candidate.`);
+        }
+      }
+    }
+  }
+
+  if (process.env.MIGRATIONS_STRICT === 'true') {
+    throw lastConnectivityError || new Error('Migration DB connectivity failed');
+  }
+
+  console.warn(
+    'Migration DB connectivity failed; startup continued without SQL migration. ' +
+    'Use Supabase pooler URI in DATABASE_URL (IPv4-compatible) and redeploy.'
+  );
 };
 
 module.exports = { runMigrations };

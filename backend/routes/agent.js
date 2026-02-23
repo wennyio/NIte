@@ -67,8 +67,16 @@ function getCurrentFilesFromDisk() {
 }
 
 async function getCurrentFiles(supabase) {
+  let fallbackTargetCustomerId = null;
+  let fallbackLiveCustomer = null;
   try {
-    const { files: sourceFiles, customerId, liveCustomer } = await getLiveAppFiles(supabase, ['source']);
+    const { files: sourceFiles, customerId, liveCustomer } = await getLiveAppFiles(
+      supabase,
+      ['source'],
+      { allowGlobalFallback: false }
+    );
+    fallbackTargetCustomerId = customerId || null;
+    fallbackLiveCustomer = liveCustomer || null;
     const importantPaths = new Set([
       'frontend/src/pages/Public.jsx',
       'frontend/src/pages/Dashboard.jsx',
@@ -91,8 +99,8 @@ async function getCurrentFiles(supabase) {
 
   return {
     files: getCurrentFilesFromDisk(),
-    targetCustomerId: null,
-    liveCustomer: null
+    targetCustomerId: fallbackTargetCustomerId,
+    liveCustomer: fallbackLiveCustomer
   };
 }
 
@@ -201,7 +209,7 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       }
 
       // Rebuild frontend
-      execSync('npm run build --prefix frontend', { cwd: BASE_DIR, stdio: 'inherit' });
+      execSync('npm run build --prefix frontend -- --outDir dist', { cwd: BASE_DIR, stdio: 'inherit' });
 
       // Persist updates for the active live app context
       const persistCustomerId = targetCustomerId || null;

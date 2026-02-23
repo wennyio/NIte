@@ -81,7 +81,7 @@ async function generateApp(businessContext, customerId) {
 
   // Run Vite build
   console.log('Building frontend...');
-  execSync('npm run build --prefix frontend', {
+  execSync('npm run build --prefix frontend -- --outDir dist', {
     cwd: BASE_DIR,
     stdio: 'inherit'
   });

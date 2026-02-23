@@ -2,11 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
 const { checkHealth } = require('./modules/health');
 const { runMigrations } = require('./db/migrate');
 const { getSupabaseClient } = require('./modules/supabase');
 const { getLiveAppFiles } = require('./modules/live-app');
+const { restoreCompiledFilesToDisk } = require('./modules/restore-generated');
 
 const app = express();
 app.use(cors());
@@ -28,7 +28,7 @@ app.use('/api', (req, res, next) => {
 });
 
 // Nite platform assets
-app.use(express.static(path.join(__dirname, '../frontend/nite-dist')));
+app.use(express.static(path.join(__dirname, '../frontend/nite-dist'), { index: false }));
 
 // Nite platform routes
 app.get('/start*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
@@ -36,25 +36,10 @@ app.get('/admin*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/
 app.get('/dashboard*', (req, res) => res.sendFile(path.join(__dirname, '../frontend/nite-dist/index.html')));
 
 // Generated app
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
+app.use(express.static(path.join(__dirname, '../frontend/dist'), { index: false }));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
 });
-
-const LOCKED_FILES = [
-  'backend/server.js',
-  'backend/modules/auth.js',
-  'backend/modules/billing.js',
-  'backend/modules/health.js',
-  'backend/db/migrate.js',
-  'backend/db/schema.sql',
-  'backend/routes/index.js',
-  'frontend/src/main.jsx',
-  'frontend/vite.config.js',
-  'frontend/index.html',
-  'config/env.template',
-  'Dockerfile'
-];
 
 async function restoreFromSupabase() {
   try {
@@ -64,42 +49,12 @@ async function restoreFromSupabase() {
       return;
     }
 
-    const { files, customerId, source } = await getLiveAppFiles(supabase, ['source', 'compiled']);
+    const { files, customerId, source } = await getLiveAppFiles(supabase, ['compiled']);
     if (!files || files.length === 0) {
       console.log('No generated files to restore from Supabase');
       return;
     }
-
-    const BASE_DIR = path.resolve(__dirname, '../');
-    let restoredCount = 0;
-    let skippedCount = 0;
-
-    for (const file of files) {
-      const normalizedPath = String(file.file_path || '')
-        .replace(/\\/g, '/')
-        .replace(/^\.?\//, '');
-
-      // Never restore backend source from Supabase.
-      if (!normalizedPath || normalizedPath.startsWith('backend/')) {
-        skippedCount++;
-        continue;
-      }
-      if (LOCKED_FILES.includes(normalizedPath)) {
-        skippedCount++;
-        continue;
-      }
-
-      const fullPath = path.resolve(BASE_DIR, normalizedPath);
-      if (!fullPath.startsWith(BASE_DIR + path.sep)) {
-        skippedCount++;
-        continue;
-      }
-
-      const dir = path.dirname(fullPath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(fullPath, file.file_content, 'utf8');
-      restoredCount++;
-    }
+    const { restoredCount, skippedCount } = restoreCompiledFilesToDisk(files);
 
     console.log(`Restored ${restoredCount} files from Supabase (skipped ${skippedCount}) from ${source}${customerId ? `:${customerId}` : ''} ✓`);
   } catch (err) {

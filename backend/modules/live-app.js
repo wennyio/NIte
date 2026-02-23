@@ -17,40 +17,100 @@ async function getLatestLiveCustomer(supabase) {
   }
 }
 
-async function getLiveAppFiles(supabase, fileTypes = ['source', 'compiled']) {
-  const liveCustomer = await getLatestLiveCustomer(supabase);
-
-  if (liveCustomer?.id) {
-    const liveRows = await supabase
-      .from('generated_apps')
-      .select('file_path, file_content, file_type')
-      .eq('customer_id', liveCustomer.id)
-      .in('file_type', fileTypes);
-
-    if (!liveRows.error && Array.isArray(liveRows.data) && liveRows.data.length > 0) {
-      return {
-        files: liveRows.data,
-        customerId: liveCustomer.id,
-        source: 'live-customer',
-        liveCustomer
-      };
-    }
+async function getAppFilesForCustomer(supabase, customerId, fileTypes = ['source', 'compiled']) {
+  if (!customerId) {
+    return { files: [], source: 'missing-customer-id', customerId: null };
   }
+  const rows = await supabase
+    .from('generated_apps')
+    .select('file_path, file_content, file_type')
+    .eq('customer_id', customerId)
+    .in('file_type', fileTypes);
+  if (rows.error) throw rows.error;
 
-  const fallbackRows = await supabase
+  return {
+    files: Array.isArray(rows.data) ? rows.data : [],
+    source: 'customer',
+    customerId
+  };
+}
+
+async function getGlobalAppFiles(supabase, fileTypes = ['source', 'compiled']) {
+  const rows = await supabase
     .from('generated_apps')
     .select('file_path, file_content, file_type')
     .is('customer_id', null)
     .in('file_type', fileTypes);
 
-  if (fallbackRows.error) throw fallbackRows.error;
+  if (rows.error) throw rows.error;
+  return {
+    files: Array.isArray(rows.data) ? rows.data : [],
+    source: 'global-null',
+    customerId: null
+  };
+}
+
+async function countAppFiles(supabase, customerId) {
+  const [sourceRes, compiledRes] = await Promise.all([
+    supabase
+      .from('generated_apps')
+      .select('id', { count: 'exact', head: true })
+      .eq('customer_id', customerId)
+      .eq('file_type', 'source'),
+    supabase
+      .from('generated_apps')
+      .select('id', { count: 'exact', head: true })
+      .eq('customer_id', customerId)
+      .eq('file_type', 'compiled')
+  ]);
+
+  if (sourceRes.error) throw sourceRes.error;
+  if (compiledRes.error) throw compiledRes.error;
 
   return {
-    files: fallbackRows.data || [],
+    source: sourceRes.count || 0,
+    compiled: compiledRes.count || 0
+  };
+}
+
+async function getLiveAppFiles(supabase, fileTypes = ['source', 'compiled'], options = {}) {
+  const { allowGlobalFallback = true } = options;
+  const liveCustomer = await getLatestLiveCustomer(supabase);
+
+  if (liveCustomer?.id) {
+    const liveRows = await getAppFilesForCustomer(supabase, liveCustomer.id, fileTypes);
+    if (liveRows.files.length > 0) {
+      return {
+        files: liveRows.files,
+        customerId: liveCustomer.id,
+        source: 'live-customer',
+        liveCustomer
+      };
+    }
+    if (!allowGlobalFallback) {
+      return {
+        files: [],
+        customerId: liveCustomer.id,
+        source: 'live-customer-empty',
+        liveCustomer
+      };
+    }
+  }
+
+  const fallbackRows = await getGlobalAppFiles(supabase, fileTypes);
+
+  return {
+    files: fallbackRows.files,
     customerId: null,
     source: 'global-null',
     liveCustomer
   };
 }
 
-module.exports = { getLatestLiveCustomer, getLiveAppFiles };
+module.exports = {
+  getLatestLiveCustomer,
+  getLiveAppFiles,
+  getAppFilesForCustomer,
+  getGlobalAppFiles,
+  countAppFiles
+};

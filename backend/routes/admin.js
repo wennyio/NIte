@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { orchestrate, getBuildStatus } = require('../generator/orchestrate');
 const { getSupabaseClient } = require('../modules/supabase');
+const { countAppFiles, getAppFilesForCustomer } = require('../modules/live-app');
+const { restoreCompiledFilesToDisk } = require('../modules/restore-generated');
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -120,6 +122,20 @@ router.post('/set-live', async (req, res) => {
       return res.status(400).json({ error: 'customerId is required' });
     }
 
+    const counts = await countAppFiles(supabase, customerId);
+    if (counts.compiled === 0 || counts.source === 0) {
+      return res.status(400).json({
+        error: 'Selected customer has no complete generated app snapshot (source + compiled). Generate the app first.'
+      });
+    }
+
+    const compiled = await getAppFilesForCustomer(supabase, customerId, ['compiled']);
+    if (!compiled.files.length) {
+      return res.status(400).json({ error: 'No compiled app files found for selected customer.' });
+    }
+
+    const restored = restoreCompiledFilesToDisk(compiled.files);
+
     const demote = await supabase
       .from('customers')
       .update({ app_status: 'pending' })
@@ -135,7 +151,7 @@ router.post('/set-live', async (req, res) => {
       .single();
     if (error) throw error;
 
-    res.json({ success: true, customer: data });
+    res.json({ success: true, customer: data, restored });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

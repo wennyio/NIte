@@ -8,7 +8,7 @@ COPY frontend/package.json ./frontend/
 RUN npm install --prefix frontend
 
 COPY . .
-ARG CACHE_BUST=24
+ARG CACHE_BUST=25
 RUN npm run build --prefix frontend
 
 EXPOSE 3000

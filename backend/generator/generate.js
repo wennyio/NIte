@@ -26,6 +26,38 @@ const LOCKED_FILES = [
   'Dockerfile'
 ];
 
+const REQUIRED_SOURCE_FALLBACKS = [
+  'frontend/src/pages/Public.jsx',
+  'frontend/src/pages/Dashboard.jsx',
+  'frontend/src/pages/Terms.jsx',
+  'frontend/src/pages/Privacy.jsx',
+  'frontend/src/pages/Contact.jsx',
+  'frontend/src/App.jsx'
+];
+
+function normalizePath(filePath) {
+  return String(filePath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '');
+}
+
+function ensureRequiredFallbackFiles(files) {
+  const existing = new Set((Array.isArray(files) ? files : []).map((file) => normalizePath(file.path)));
+  const enriched = Array.isArray(files) ? [...files] : [];
+
+  for (const requiredPath of REQUIRED_SOURCE_FALLBACKS) {
+    if (existing.has(requiredPath)) continue;
+    const fullPath = path.join(BASE_DIR, requiredPath);
+    if (!fs.existsSync(fullPath)) continue;
+    const content = fs.readFileSync(fullPath, 'utf8');
+    enriched.push({ path: requiredPath, content });
+    existing.add(requiredPath);
+    console.warn(`Injecting fallback required file: ${requiredPath}`);
+  }
+
+  return enriched;
+}
+
 async function requestGeneration(prompt, validationErrors = [], attempt = 1) {
   const retryNote = attempt > 1
     ? `\n\nIMPORTANT RETRY ${attempt}: Your previous output failed validation. Fix every issue and return a complete valid app.\nValidation errors:\n- ${validationErrors.join('\n- ')}\nYou must output all required files in ===FILE: ... === format.`
@@ -72,7 +104,7 @@ async function generateApp(businessContext, customerId) {
     const rawOutput = await requestGeneration(prompt, validationErrors, attempt);
     console.log(`Generation attempt ${attempt} complete. Parsing...`);
 
-    files = parseGeneratedOutput(rawOutput);
+    files = ensureRequiredFallbackFiles(parseGeneratedOutput(rawOutput));
     console.log(`Parsed ${files.length} files`);
 
     if (!Array.isArray(files) || files.length === 0) {

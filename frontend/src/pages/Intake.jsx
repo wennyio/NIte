@@ -141,8 +141,7 @@ export default function Intake() {
       const customerRes = await axios.post('/admin/customers', {
         business_name: preview.business_name,
         business_type: preview.business_type,
-        owner_name: preview.owner_name,
-        owner_email: preview.owner_email
+        owner_name: preview.owner_name
       });
       const customerId = customerRes?.data?.id;
       if (!customerId) throw new Error('Customer creation failed');
@@ -247,7 +246,7 @@ export default function Intake() {
         {phase === 'confirming' && preview && (
           <div style={{ marginTop: '16px', border: '1px solid #1a1a14', padding: '18px' }}>
             <div className="mono" style={{ fontSize: '10px', letterSpacing: '3px', color: '#c9a96e', marginBottom: '8px' }}>BUILD PREVIEW</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px', marginBottom: '14px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px', marginBottom: '14px' }}>
               <div style={{ border: '1px solid #1a1a14', padding: '10px' }}>
                 <div className="mono" style={{ fontSize: '9px', color: '#777', letterSpacing: '2px' }}>BUSINESS</div>
                 <div>{preview.business_name}</div>
@@ -255,10 +254,6 @@ export default function Intake() {
               <div style={{ border: '1px solid #1a1a14', padding: '10px' }}>
                 <div className="mono" style={{ fontSize: '9px', color: '#777', letterSpacing: '2px' }}>TYPE</div>
                 <div>{preview.business_type}</div>
-              </div>
-              <div style={{ border: '1px solid #1a1a14', padding: '10px' }}>
-                <div className="mono" style={{ fontSize: '9px', color: '#777', letterSpacing: '2px' }}>OWNER EMAIL</div>
-                <div>{preview.owner_email}</div>
               </div>
             </div>
             <div className="mono" style={{ fontSize: '10px', color: '#c9a96e', marginBottom: '8px', letterSpacing: '2px' }}>

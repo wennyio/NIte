@@ -122,11 +122,8 @@ function sanitizeBusinessContext(rawContext, originalPrompt) {
   const isEcommerce = /ecommerce|e-commerce|retail|store|shop|product/i.test(`${business_type} ${prompt}`);
   const owner_name = String(raw.owner_name || 'Owner').slice(0, 80).trim() || 'Owner';
 
-  const emailCandidate = String(raw.owner_email || '').trim();
   const safeEmailLocal = slugifyBusinessName(business_name).replace(/-/g, '') || 'owner';
-  const owner_email = /\S+@\S+\.\S+/.test(emailCandidate)
-    ? emailCandidate
-    : `${safeEmailLocal}@nite.local`;
+  const owner_email = `${safeEmailLocal}@nite.local`;
 
   const rawServices = Array.isArray(raw.services) ? raw.services : [];
   const normalizedServices = rawServices
@@ -285,9 +282,14 @@ router.post('/customers', async (req, res) => {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
     const { business_name, business_type, owner_name, owner_email } = req.body;
-    if (!business_name || !owner_email) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!business_name) {
+      return res.status(400).json({ error: 'Missing business_name' });
     }
+    const safeEmailLocal = slugifyBusinessName(business_name).replace(/-/g, '') || 'owner';
+    const normalizedOwnerEmail = String(owner_email || '').trim();
+    const finalOwnerEmail = /\S+@\S+\.\S+/.test(normalizedOwnerEmail)
+      ? normalizedOwnerEmail
+      : `${safeEmailLocal}@nite.local`;
     const subdomain = await generateUniqueSubdomain(supabase, business_name);
     const { data, error } = await supabase
       .from('customers')
@@ -295,7 +297,7 @@ router.post('/customers', async (req, res) => {
         business_name,
         business_type,
         owner_name,
-        owner_email,
+        owner_email: finalOwnerEmail,
         subdomain,
         status: 'active',
         tier: 'growth',

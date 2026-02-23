@@ -8,6 +8,14 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
+function mapAppStatusToBuildStatus(appStatus) {
+  if (appStatus === 'live') return 'complete';
+  if (appStatus === 'error') return 'error';
+  if (appStatus === 'generating') return 'generating';
+  if (appStatus === 'queued') return 'queued';
+  return 'idle';
+}
+
 // Get all customers
 router.get('/customers', async (req, res) => {
   try {
@@ -66,8 +74,28 @@ router.post('/generate', async (req, res) => {
 });
 
 // Build status
-router.get('/build-status', (req, res) => {
-  res.json(getBuildStatus());
+router.get('/build-status', async (req, res) => {
+  try {
+    const { customerId } = req.query;
+    if (customerId) {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('id, app_status')
+        .eq('id', customerId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.json({ status: 'idle', customerId });
+      return res.json({
+        status: mapAppStatusToBuildStatus(data.app_status),
+        customerId: data.id,
+        appStatus: data.app_status || 'pending'
+      });
+    }
+
+    res.json(getBuildStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/ping', (req, res) => res.json({ ping: 'pong' }));

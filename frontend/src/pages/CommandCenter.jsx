@@ -62,6 +62,7 @@ export default function CommandCenter() {
   const appStatusColor = (status) => ({
     live: '#6ec9a9',
     generating: '#c9a96e',
+    queued: '#7b93ff',
     error: '#e07070',
     pending: '#6b7280'
   })[status] || '#6b7280';
@@ -116,7 +117,7 @@ export default function CommandCenter() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
           <div style={{ fontSize: '11px', color: '#555' }}>
-            Build: <span style={{ color: builds?.status === 'complete' ? '#6ec9a9' : builds?.status === 'generating' ? '#c9a96e' : builds?.status === 'error' ? '#e07070' : '#555' }}>
+            Build: <span style={{ color: builds?.status === 'complete' ? '#6ec9a9' : builds?.status === 'generating' ? '#c9a96e' : builds?.status === 'queued' ? '#7b93ff' : builds?.status === 'error' ? '#e07070' : '#555' }}>
               {builds?.status?.toUpperCase() || 'IDLE'}
             </span>
           </div>

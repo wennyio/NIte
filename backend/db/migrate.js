@@ -51,6 +51,19 @@ function isConnectivityError(err) {
   return !!(err && (codes.has(err.code) || (typeof err.message === 'string' && err.message.includes('ENETUNREACH'))));
 }
 
+function normalizeDatabaseUrl(databaseUrl) {
+  try {
+    const url = new URL(databaseUrl);
+    const sslMode = (url.searchParams.get('sslmode') || '').toLowerCase();
+    if (!sslMode || sslMode === 'prefer' || sslMode === 'require' || sslMode === 'verify-ca') {
+      url.searchParams.set('sslmode', 'verify-full');
+    }
+    return url.toString();
+  } catch {
+    return databaseUrl;
+  }
+}
+
 const runMigrations = async () => {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -74,10 +87,14 @@ const runMigrations = async () => {
   const migrationName = 'backend/db/schema.sql';
 
   const sslMode = (process.env.PGSSLMODE || '').toLowerCase();
-  const client = new Client({
-    connectionString: databaseUrl,
-    ssl: sslMode === 'disable' ? false : { rejectUnauthorized: false }
-  });
+  const normalizedDatabaseUrl = normalizeDatabaseUrl(databaseUrl);
+  const clientConfig = { connectionString: normalizedDatabaseUrl };
+  if (sslMode === 'disable') {
+    clientConfig.ssl = false;
+  } else if (sslMode === 'insecure') {
+    clientConfig.ssl = { rejectUnauthorized: false };
+  }
+  const client = new Client(clientConfig);
 
   try {
     await client.connect();

@@ -3,12 +3,13 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { createClient } = require('@supabase/supabase-js');
 const { parseGeneratedOutput } = require('../generator/parser');
+const { getSupabaseClient } = require('../modules/supabase');
+const { getLiveAppFiles } = require('../modules/live-app');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-const BASE_DIR = path.join(__dirname, '../../');
+const BASE_DIR = path.resolve(__dirname, '../../');
 
 const LOCKED_FILES = [
   'backend/server.js',
@@ -25,12 +26,20 @@ const LOCKED_FILES = [
   'Dockerfile'
 ];
 
-function getSupabase() {
-  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+function getSupabaseOrThrow() {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Supabase is not configured');
+  return supabase;
+}
+
+function normalizePath(filePath) {
+  return String(filePath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '');
 }
 
 // Read current source files from disk
-function getCurrentFiles() {
+function getCurrentFilesFromDisk() {
   const filePaths = [
     'frontend/src/pages/Public.jsx',
     'frontend/src/pages/Dashboard.jsx',
@@ -57,12 +66,42 @@ function getCurrentFiles() {
   return files;
 }
 
+async function getCurrentFiles(supabase) {
+  try {
+    const { files: sourceFiles, customerId, liveCustomer } = await getLiveAppFiles(supabase, ['source']);
+    const importantPaths = new Set([
+      'frontend/src/pages/Public.jsx',
+      'frontend/src/pages/Dashboard.jsx',
+      'frontend/src/App.jsx',
+    ]);
+    const files = [];
+    for (const row of Array.isArray(sourceFiles) ? sourceFiles : []) {
+      const normalizedPath = normalizePath(row.file_path);
+      if (!normalizedPath) continue;
+      if (importantPaths.has(normalizedPath) || normalizedPath.startsWith('frontend/src/components/')) {
+        files.push({ path: normalizedPath, content: row.file_content || '' });
+      }
+    }
+    if (files.length > 0) {
+      return { files, targetCustomerId: customerId, liveCustomer };
+    }
+  } catch (err) {
+    console.error('Failed to load source from Supabase for agent:', err.message);
+  }
+
+  return {
+    files: getCurrentFilesFromDisk(),
+    targetCustomerId: null,
+    liveCustomer: null
+  };
+}
+
 // Upload image to Supabase Storage
 router.post('/upload', upload.single('image'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
-    const supabase = getSupabase();
+    const supabase = getSupabaseOrThrow();
     const ext = req.file.originalname.split('.').pop();
     const filename = `agent-uploads/${Date.now()}.${ext}`;
 
@@ -88,9 +127,13 @@ router.post('/chat', async (req, res) => {
     const { message, imageUrl, conversationHistory = [] } = req.body;
     if (!message) return res.status(400).json({ error: 'Message required' });
 
-    const currentFiles = getCurrentFiles();
+    const supabase = getSupabaseOrThrow();
+    const { files: currentFiles, targetCustomerId, liveCustomer } = await getCurrentFiles(supabase);
+    const liveBusiness = liveCustomer?.business_name || 'Unknown business';
 
     const systemPrompt = `You are an AI assistant embedded in a business owner's website dashboard. You help them edit and improve their live website.
+
+Current live business context: ${liveBusiness}
 
 You have access to the current source files of their website. When the owner asks you to make a change, you can either:
 1. RESPOND with helpful advice or answer their question (most messages)
@@ -148,8 +191,10 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       const files = parseGeneratedOutput(rawOutput);
 
       for (const file of files) {
-        if (LOCKED_FILES.includes(file.path)) continue;
-        const fullPath = path.join(BASE_DIR, file.path);
+        const normalizedPath = normalizePath(file.path);
+        if (!normalizedPath || LOCKED_FILES.includes(normalizedPath)) continue;
+        const fullPath = path.resolve(BASE_DIR, normalizedPath);
+        if (!fullPath.startsWith(BASE_DIR + path.sep)) continue;
         const dir = path.dirname(fullPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(fullPath, file.content, 'utf8');
@@ -158,8 +203,8 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       // Rebuild frontend
       execSync('npm run build --prefix frontend', { cwd: BASE_DIR, stdio: 'inherit' });
 
-      // Update Supabase with new compiled files
-      const supabase = getSupabase();
+      // Persist updates for the active live app context
+      const persistCustomerId = targetCustomerId || null;
       const distDir = path.join(BASE_DIR, 'frontend/dist');
       const compiledRows = [];
 
@@ -173,7 +218,7 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
             const relativePath = 'frontend/dist' + fullPath.replace(distDir, '');
             try {
               compiledRows.push({
-                customer_id: null,
+                customer_id: persistCustomerId,
                 file_path: relativePath,
                 file_content: fs.readFileSync(fullPath, 'utf8'),
                 file_type: 'compiled'
@@ -185,18 +230,21 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
 
       readDist(distDir);
 
-      // Also save updated source files
-      const sourceRows = files
-        .filter(f => !LOCKED_FILES.includes(f.path) && !f.path.startsWith('backend/'))
-        .map(f => ({ customer_id: null, file_path: f.path, file_content: f.content, file_type: 'source' }));
+      // Capture a full source snapshot so context stays consistent on next chat.
+      const sourceRows = getCurrentFilesFromDisk().map((f) => ({
+        customer_id: persistCustomerId,
+        file_path: f.path,
+        file_content: f.content,
+        file_type: 'source'
+      }));
 
-      // Delete old compiled files and insert new ones
-      await supabase.from('generated_apps').delete().eq('file_type', 'compiled').is('customer_id', null);
-      for (const row of sourceRows) {
-        await supabase.from('generated_apps').upsert(row, { onConflict: 'customer_id,file_path' });
+      if (persistCustomerId) {
+        await supabase.from('generated_apps').delete().eq('customer_id', persistCustomerId);
+      } else {
+        await supabase.from('generated_apps').delete().is('customer_id', null);
       }
 
-      const allRows = compiledRows;
+      const allRows = [...sourceRows, ...compiledRows];
       for (let i = 0; i < allRows.length; i += 50) {
         await supabase.from('generated_apps').insert(allRows.slice(i, i + 50));
       }
@@ -207,12 +255,23 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
         .replace(/===REBUILD===/g, '')
         .trim() || "Done! Your site has been updated. Refresh to see the changes.";
 
-      return res.json({ reply: cleanResponse, rebuilt: true, filesChanged: files.length });
+      return res.json({
+        reply: cleanResponse,
+        rebuilt: true,
+        filesChanged: files.length,
+        liveBusiness,
+        customerId: persistCustomerId
+      });
     }
 
     // Just a conversation response
     const cleanResponse = rawOutput.trim();
-    res.json({ reply: cleanResponse, rebuilt: false });
+    res.json({
+      reply: cleanResponse,
+      rebuilt: false,
+      liveBusiness,
+      customerId: targetCustomerId || null
+    });
 
   } catch (err) {
     console.error('Agent error:', err.message);

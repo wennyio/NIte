@@ -27,6 +27,25 @@ async function updateCustomerAppStatus(customerId, appStatus) {
   }
 }
 
+async function promoteCustomerToLive(customerId) {
+  if (!customerId) return;
+  try {
+    const supabase = getSupabase();
+    const demote = await supabase
+      .from('customers')
+      .update({ app_status: 'pending' })
+      .eq('app_status', 'live')
+      .neq('id', customerId);
+    if (demote.error) {
+      console.error(`Failed to demote previous live customer(s):`, demote.error.message);
+    }
+
+    await updateCustomerAppStatus(customerId, 'live');
+  } catch (err) {
+    console.error(`Error promoting customer ${customerId} to live:`, err.message);
+  }
+}
+
 function refreshBuildStatus(partial = {}) {
   buildStatus = {
     ...buildStatus,
@@ -89,7 +108,7 @@ async function processQueue() {
       await updateCustomerAppStatus(job.customerId, 'generating');
 
       const files = await generateApp(job.businessContext, job.customerId);
-      await updateCustomerAppStatus(job.customerId, 'live');
+      await promoteCustomerToLive(job.customerId);
       refreshBuildStatus({
         status: 'complete',
         buildId: job.buildId,

@@ -84,6 +84,136 @@ async function generateUniqueSubdomain(supabase, businessName) {
   return `${base}-${Date.now()}`;
 }
 
+function guessBusinessTypeFromPrompt(prompt) {
+  const text = String(prompt || '').toLowerCase();
+  if (/(salon|barber|barbershop|beauty|spa|lashes|nails|stylist)/.test(text)) return 'salon';
+  if (/(gym|fitness|workout|trainer|crossfit)/.test(text)) return 'gym';
+  if (/(yoga|wellness|meditation|pilates)/.test(text)) return 'yoga studio';
+  if (/(restaurant|food|truck|cafe|coffee|bakery|kitchen)/.test(text)) return 'food business';
+  if (/(lawn|landscap|cleaning|pressure wash|plumb|electric|handyman|repair)/.test(text)) return 'home service';
+  if (/(ecommerce|e-commerce|shop|store|retail|product)/.test(text)) return 'ecommerce';
+  return 'service business';
+}
+
+function extractServicesFromPrompt(prompt) {
+  const text = String(prompt || '');
+  const services = [];
+  const pricedRegex = /([A-Za-z][A-Za-z0-9 '&/.-]{2,50}?)\s*(?:for|at|is)?\s*\$([0-9]{1,5}(?:\.[0-9]{1,2})?)/g;
+  let match;
+  while ((match = pricedRegex.exec(text)) !== null) {
+    const name = String(match[1] || '').trim().replace(/\s+/g, ' ');
+    const price = Number(match[2]);
+    if (!name || !Number.isFinite(price)) continue;
+    services.push({ name, price, duration: '60 min' });
+    if (services.length >= 12) break;
+  }
+  return services;
+}
+
+function sanitizeBusinessContext(rawContext, originalPrompt) {
+  const raw = rawContext && typeof rawContext === 'object' ? rawContext : {};
+  const prompt = String(originalPrompt || '').trim();
+  const baseNameFromPrompt = String(prompt.split(/[.!?\n]/)[0] || '')
+    .replace(/^(build|create|make)\s+/i, '')
+    .trim();
+  const guessedType = guessBusinessTypeFromPrompt(prompt);
+  const business_name = String(raw.business_name || baseNameFromPrompt || 'New Business').slice(0, 120).trim() || 'New Business';
+  const business_type = String(raw.business_type || guessedType || 'service business').slice(0, 80).trim() || 'service business';
+  const owner_name = String(raw.owner_name || 'Owner').slice(0, 80).trim() || 'Owner';
+
+  const emailCandidate = String(raw.owner_email || '').trim();
+  const safeEmailLocal = slugifyBusinessName(business_name).replace(/-/g, '') || 'owner';
+  const owner_email = /\S+@\S+\.\S+/.test(emailCandidate)
+    ? emailCandidate
+    : `${safeEmailLocal}@nite.local`;
+
+  const rawServices = Array.isArray(raw.services) ? raw.services : [];
+  const normalizedServices = rawServices
+    .map((item) => {
+      if (!item) return null;
+      if (typeof item === 'string') {
+        return { name: item.trim(), duration: '60 min' };
+      }
+      const name = String(item.name || '').trim();
+      if (!name) return null;
+      const normalized = { name, duration: String(item.duration || '60 min').trim() || '60 min' };
+      const price = Number(item.price);
+      if (Number.isFinite(price) && price >= 0) normalized.price = price;
+      return normalized;
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+  const services = normalizedServices.length > 0 ? normalizedServices : extractServicesFromPrompt(prompt);
+
+  const staff = Array.isArray(raw.staff) && raw.staff.length > 0
+    ? raw.staff.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 12)
+    : ['owner'];
+
+  const needs = Array.isArray(raw.needs) && raw.needs.length > 0
+    ? raw.needs.map((n) => String(n || '').trim()).filter(Boolean).slice(0, 12)
+    : [prompt].filter(Boolean);
+
+  const public_features = Array.isArray(raw.public_features) && raw.public_features.length > 0
+    ? raw.public_features.map((f) => String(f || '').trim()).filter(Boolean).slice(0, 12)
+    : ['booking page', 'service menu', 'contact info'];
+  const dashboard_features = Array.isArray(raw.dashboard_features) && raw.dashboard_features.length > 0
+    ? raw.dashboard_features.map((f) => String(f || '').trim()).filter(Boolean).slice(0, 12)
+    : ['appointment management', 'client profiles', 'revenue dashboard', 'staff management'];
+
+  return {
+    business_name,
+    business_type,
+    owner_name,
+    owner_email,
+    services,
+    staff,
+    needs,
+    public_features,
+    dashboard_features,
+    owner_prompt: prompt
+  };
+}
+
+async function parsePromptWithClaude(prompt) {
+  const apiKey = process.env.CLAUDE_API_KEY;
+  if (!apiKey) return null;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1400,
+      system: [
+        'You convert a business owner prompt into structured JSON.',
+        'Return ONLY valid JSON with keys:',
+        'business_name, business_type, owner_name, owner_email, services, staff, needs, public_features, dashboard_features.',
+        'services must be array of objects: { name, price?, duration }',
+        'staff, needs, public_features, dashboard_features must be arrays of strings.'
+      ].join(' '),
+      messages: [
+        {
+          role: 'user',
+          content: `Owner prompt:\n${prompt}\n\nReturn only JSON.`
+        }
+      ]
+    })
+  });
+  const data = await response.json();
+  if (!response.ok || data?.error) {
+    throw new Error(data?.error?.message || `Prompt parse failed (${response.status})`);
+  }
+
+  const rawText = (Array.isArray(data.content) ? data.content : []).map((block) => block.text || '').join('\n').trim();
+  const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No JSON found in prompt parse response');
+  return JSON.parse(jsonMatch[0]);
+}
+
 // Get all customers
 router.get('/customers', async (req, res) => {
   try {
@@ -155,6 +285,36 @@ router.post('/customers', async (req, res) => {
       .single();
     if (error) throw error;
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/intake-parse', async (req, res) => {
+  try {
+    const { prompt } = req.body || {};
+    const normalizedPrompt = String(prompt || '').trim();
+    if (normalizedPrompt.length < 20) {
+      return res.status(400).json({ error: 'Please provide a longer prompt with business details.' });
+    }
+
+    let parsed = null;
+    try {
+      parsed = await parsePromptWithClaude(normalizedPrompt);
+    } catch (err) {
+      console.error('Prompt parse fallback triggered:', err.message);
+    }
+
+    const businessContext = sanitizeBusinessContext(parsed || {}, normalizedPrompt);
+    return res.json({
+      businessContext,
+      summary: {
+        business_name: businessContext.business_name,
+        business_type: businessContext.business_type,
+        services_count: businessContext.services.length,
+        staff_count: businessContext.staff.length
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

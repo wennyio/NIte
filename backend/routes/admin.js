@@ -56,7 +56,7 @@ router.post('/customers', async (req, res) => {
         subdomain,
         status: 'active',
         tier: 'growth',
-        app_status: 'generating',
+        app_status: 'pending',
       })
       .select()
       .single();

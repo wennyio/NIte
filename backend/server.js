@@ -6,6 +6,7 @@ const fs = require('fs');
 const { checkHealth } = require('./modules/health');
 const { runMigrations } = require('./db/migrate');
 const { getSupabaseClient } = require('./modules/supabase');
+const { getLiveAppFiles } = require('./modules/live-app');
 
 const app = express();
 app.use(cors());
@@ -63,13 +64,8 @@ async function restoreFromSupabase() {
       return;
     }
 
-    const { data: files, error } = await supabase
-      .from('generated_apps')
-      .select('file_path, file_content, file_type')
-      .is('customer_id', null)
-      .in('file_type', ['source', 'compiled']);
-
-    if (error || !files || files.length === 0) {
+    const { files, customerId, source } = await getLiveAppFiles(supabase, ['source', 'compiled']);
+    if (!files || files.length === 0) {
       console.log('No generated files to restore from Supabase');
       return;
     }
@@ -105,7 +101,7 @@ async function restoreFromSupabase() {
       restoredCount++;
     }
 
-    console.log(`Restored ${restoredCount} files from Supabase (skipped ${skippedCount}) ✓`);
+    console.log(`Restored ${restoredCount} files from Supabase (skipped ${skippedCount}) from ${source}${customerId ? `:${customerId}` : ''} ✓`);
   } catch (err) {
     console.error('Failed to restore from Supabase:', err.message);
   }

@@ -28,8 +28,8 @@ export default function Intake() {
   const [pollInterval, setPollInterval] = useState(null);
   const [currentCustomerId, setCurrentCustomerId] = useState('');
   const [businessName, setBusinessName] = useState('');
-  const [lastStatus, setLastStatus] = useState('');
   const bottomRef = useRef(null);
+  const lastStatusRef = useRef('');
 
   useEffect(() => {
     return () => {
@@ -55,7 +55,7 @@ export default function Intake() {
     setPhase('analyzing');
     setPreview(null);
     setLogs([]);
-    setLastStatus('');
+    lastStatusRef.current = '';
     try {
       const r = await axios.post('/admin/intake-parse', { prompt: val });
       const context = r?.data?.businessContext;
@@ -84,14 +84,14 @@ export default function Intake() {
         const status = r?.data?.status;
         setBuildStatus(status);
 
-        if (status && status !== lastStatus) {
+        if (status && status !== lastStatusRef.current) {
           if (status === 'queued') addLog('You are in queue. Your build starts automatically.');
           if (status === 'idle') addLog('Build request received. Preparing generation job...');
           if (status === 'generating') addLog('Build started. Generating your custom app...');
           if (status === 'rebuilding') addLog('Code generated. Building frontend assets...');
           if (status === 'restarting') addLog('Frontend built. Launching your live app...');
           if (status === 'complete' || status === 'live') addLog('Build complete. Your app is now live.');
-          setLastStatus(status);
+          lastStatusRef.current = status;
         }
 
         if (status === 'complete' || status === 'live') {
@@ -134,7 +134,7 @@ export default function Intake() {
     setError('');
     setPhase('generating');
     setLogs([]);
-    setLastStatus('');
+    lastStatusRef.current = '';
     addLog(`Creating owner profile for ${preview.business_name}...`);
 
     try {
@@ -262,13 +262,15 @@ export default function Intake() {
               </div>
             </div>
             <div className="mono" style={{ fontSize: '10px', color: '#c9a96e', marginBottom: '8px', letterSpacing: '2px' }}>
-              SERVICES ({Array.isArray(preview.services) ? preview.services.length : 0})
+              OFFERINGS ({Array.isArray(preview.services) ? preview.services.length : 0})
             </div>
             <div style={{ display: 'grid', gap: '8px' }}>
               {(Array.isArray(preview.services) ? preview.services : []).slice(0, 8).map((s, idx) => (
                 <div key={idx} style={{ border: '1px solid #1a1a14', padding: '10px', display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
                   <span>{s.name}</span>
-                  <span className="mono" style={{ color: '#c9a96e' }}>{s.price ? `$${s.price}` : s.duration || 'Service'}</span>
+                  <span className="mono" style={{ color: '#c9a96e' }}>
+                    {Number.isFinite(Number(s.price)) ? `$${Number(s.price)}` : (s.duration || 'Included')}
+                  </span>
                 </div>
               ))}
               {(Array.isArray(preview.services) ? preview.services : []).length === 0 && (

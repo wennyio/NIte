@@ -87,7 +87,20 @@ async function restoreFromSupabase() {
 }
 
 const PORT = process.env.PORT || 3000;
-runMigrations().then(async () => {
+
+async function bootstrap() {
+  try {
+    await runMigrations();
+  } catch (err) {
+    // Keep the app bootable when migration fails unexpectedly.
+    console.error('Startup migration error:', err.message);
+  }
+
   await restoreFromSupabase();
   app.listen(PORT, () => console.log(`App running on port ${PORT}`));
+}
+
+bootstrap().catch((err) => {
+  console.error('Fatal startup error:', err.message);
+  process.exit(1);
 });

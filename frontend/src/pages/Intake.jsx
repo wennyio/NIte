@@ -137,12 +137,14 @@ export default function Intake() {
 
   const startPolling = (customerId) => {
     let attempts = 0;
+    let pollFailures = 0;
     const interval = setInterval(async () => {
       attempts++;
       try {
         const r = await axios.get('/admin/build-status', {
           params: customerId ? { customerId } : {}
         });
+        pollFailures = 0;
         const status = r.data.status;
         setBuildStatus(status);
 
@@ -151,6 +153,8 @@ export default function Intake() {
             addMessage('nite', "You're in queue. Another build is finishing first — yours starts automatically next.");
           } else if (status === 'generating') {
             addMessage('nite', "✓ Build started. Generating your custom code...");
+          } else if (status === 'idle') {
+            addMessage('nite', "Build request received. Preparing your generation job...");
           } else if (status === 'rebuilding') {
             addMessage('nite', "✓ Code generated. Building frontend...");
           } else if (status === 'restarting') {
@@ -176,11 +180,25 @@ export default function Intake() {
         }
 
         if (attempts > 200) {
+          try {
+            if (customerId) {
+              await axios.post('/admin/set-live', { customerId });
+              clearInterval(interval);
+              setPhase('done');
+              addMessage('nite', `🎉 Your app is ready! Go to the home page to see your new ${answers.business_name} site.`);
+              return;
+            }
+          } catch { }
           clearInterval(interval);
           setPhase('error');
           addMessage('nite', "Your app is taking a bit longer than expected. Visit the home page in a few minutes to see it live.");
         }
-      } catch { }
+      } catch {
+        pollFailures++;
+        if (pollFailures === 5) {
+          addMessage('nite', "Still checking your build status... network seems slow, retrying.");
+        }
+      }
     }, 3000);
     setPollInterval(interval);
   };
@@ -265,6 +283,7 @@ export default function Intake() {
         {phase === 'generating' && (
           <div className="mono pulse" style={{ fontSize: '11px', letterSpacing: '2px', color: '#c9a96e' }}>
             {buildStatus === 'queued' ? '▸ WAITING IN BUILD QUEUE...' :
+             buildStatus === 'idle' ? '▸ PREPARING BUILD...' :
              buildStatus === 'rebuilding' ? '▸ BUILDING FRONTEND...' :
              buildStatus === 'restarting' ? '▸ LAUNCHING...' :
              '▸ GENERATING CODE...'}

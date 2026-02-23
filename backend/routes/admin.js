@@ -16,10 +16,46 @@ function getSupabaseOr503(res) {
 
 function mapAppStatusToBuildStatus(appStatus) {
   if (appStatus === 'live') return 'complete';
+  if (appStatus === 'complete') return 'complete';
   if (appStatus === 'error') return 'error';
   if (appStatus === 'generating') return 'generating';
   if (appStatus === 'queued') return 'queued';
+  if (appStatus === 'pending') return 'queued';
   return 'idle';
+}
+
+async function promoteCustomerSnapshotToLive(supabase, customerId, options = {}) {
+  const { restoreToDisk = true } = options;
+  if (!customerId) throw new Error('customerId is required');
+
+  const counts = await countAppFiles(supabase, customerId);
+  if (counts.compiled === 0 || counts.source === 0) {
+    throw new Error('Selected customer has no complete generated app snapshot (source + compiled). Generate the app first.');
+  }
+
+  const compiled = await getAppFilesForCustomer(supabase, customerId, ['compiled']);
+  if (!compiled.files.length) {
+    throw new Error('No compiled app files found for selected customer.');
+  }
+
+  const restored = restoreToDisk ? restoreCompiledFilesToDisk(compiled.files) : { restoredCount: 0, skippedCount: 0 };
+
+  const demote = await supabase
+    .from('customers')
+    .update({ app_status: 'pending' })
+    .eq('app_status', 'live')
+    .neq('id', customerId);
+  if (demote.error) throw demote.error;
+
+  const { data, error } = await supabase
+    .from('customers')
+    .update({ app_status: 'live' })
+    .eq('id', customerId)
+    .select('*')
+    .single();
+  if (error) throw error;
+
+  return { customer: data, restored, counts };
 }
 
 function slugifyBusinessName(name) {
@@ -131,6 +167,19 @@ router.post('/generate', async (req, res) => {
     if (!businessContext || !businessContext.business_type || !businessContext.business_name) {
       return res.status(400).json({ error: 'Missing business context' });
     }
+
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+    if (customerId) {
+      const queuedUpdate = await supabase
+        .from('customers')
+        .update({ app_status: 'queued' })
+        .eq('id', customerId);
+      if (queuedUpdate.error) {
+        console.error(`Failed to pre-set queued status for ${customerId}:`, queuedUpdate.error.message);
+      }
+    }
+
     const result = await orchestrate(businessContext, customerId || null);
     res.json(result);
   } catch (err) {
@@ -152,8 +201,35 @@ router.get('/build-status', async (req, res) => {
         .maybeSingle();
       if (error) throw error;
       if (!data) return res.json({ status: 'idle', customerId });
+
+      const global = getBuildStatus();
+      const dbMappedStatus = mapAppStatusToBuildStatus(data.app_status);
+      const globalMatchesCustomer = global?.customerId === customerId || global?.activeCustomerId === customerId;
+      if (globalMatchesCustomer && ['idle', 'queued', 'generating'].includes(dbMappedStatus) && ['queued', 'generating', 'complete', 'error'].includes(global?.status)) {
+        return res.json({
+          status: global.status,
+          customerId: data.id,
+          appStatus: data.app_status || 'pending',
+          source: 'global-fallback'
+        });
+      }
+
+      if (['pending', 'queued', 'generating', 'error'].includes(data.app_status || '')) {
+        try {
+          const recovered = await promoteCustomerSnapshotToLive(supabase, customerId);
+          return res.json({
+            status: 'complete',
+            customerId: recovered.customer.id,
+            appStatus: recovered.customer.app_status || 'live',
+            autoRecovered: true
+          });
+        } catch {
+          // No complete snapshot yet; continue returning current mapped status.
+        }
+      }
+
       return res.json({
-        status: mapAppStatusToBuildStatus(data.app_status),
+        status: dbMappedStatus,
         customerId: data.id,
         appStatus: data.app_status || 'pending'
       });
@@ -177,36 +253,8 @@ router.post('/set-live', async (req, res) => {
       return res.status(400).json({ error: 'customerId is required' });
     }
 
-    const counts = await countAppFiles(supabase, customerId);
-    if (counts.compiled === 0 || counts.source === 0) {
-      return res.status(400).json({
-        error: 'Selected customer has no complete generated app snapshot (source + compiled). Generate the app first.'
-      });
-    }
-
-    const compiled = await getAppFilesForCustomer(supabase, customerId, ['compiled']);
-    if (!compiled.files.length) {
-      return res.status(400).json({ error: 'No compiled app files found for selected customer.' });
-    }
-
-    const restored = restoreCompiledFilesToDisk(compiled.files);
-
-    const demote = await supabase
-      .from('customers')
-      .update({ app_status: 'pending' })
-      .eq('app_status', 'live')
-      .neq('id', customerId);
-    if (demote.error) throw demote.error;
-
-    const { data, error } = await supabase
-      .from('customers')
-      .update({ app_status: 'live' })
-      .eq('id', customerId)
-      .select('*')
-      .single();
-    if (error) throw error;
-
-    res.json({ success: true, customer: data, restored });
+    const promoted = await promoteCustomerSnapshotToLive(supabase, customerId);
+    res.json({ success: true, customer: promoted.customer, restored: promoted.restored });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

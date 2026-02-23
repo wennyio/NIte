@@ -28,7 +28,8 @@ function AgentWidget() {
     setImageUrl('');
     try {
       const r = await axios.post('/api/agent/chat', { message: val, imageUrl: imageUrl || undefined, conversationHistory: newHistory.slice(-10) });
-      const agentMsg = { from: 'agent', text: r.data.reply, rebuilt: r.data.rebuilt, filesChanged: r.data.filesChanged };
+      const contextNote = r.data.liveBusiness ? `\n\n(Editing live site: ${r.data.liveBusiness})` : '';
+      const agentMsg = { from: 'agent', text: `${r.data.reply}${contextNote}`, rebuilt: r.data.rebuilt, filesChanged: r.data.filesChanged };
       setMessages(prev => [...prev, agentMsg]);
       setHistory(prev => [...prev, { role: 'assistant', content: r.data.reply }]);
     } catch {

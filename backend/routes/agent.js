@@ -266,7 +266,12 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
 
     // Just a conversation response
     const cleanResponse = rawOutput.trim();
-    res.json({ reply: cleanResponse, rebuilt: false });
+    res.json({
+      reply: cleanResponse,
+      rebuilt: false,
+      liveBusiness,
+      customerId: targetCustomerId || null
+    });
 
   } catch (err) {
     console.error('Agent error:', err.message);

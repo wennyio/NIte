@@ -16,6 +16,8 @@ const LOCKED_FILES = [
   'backend/modules/billing.js',
   'backend/modules/health.js',
   'backend/db/migrate.js',
+  'backend/db/schema.sql',
+  'backend/routes/index.js',
   'frontend/src/main.jsx',
   'frontend/vite.config.js',
   'frontend/index.html',
@@ -33,8 +35,6 @@ function getCurrentFiles() {
     'frontend/src/pages/Public.jsx',
     'frontend/src/pages/Dashboard.jsx',
     'frontend/src/App.jsx',
-    'backend/routes/index.js',
-    'backend/db/schema.sql',
   ];
   const files = [];
   for (const p of filePaths) {
@@ -187,7 +187,7 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
 
       // Also save updated source files
       const sourceRows = files
-        .filter(f => !LOCKED_FILES.includes(f.path))
+        .filter(f => !LOCKED_FILES.includes(f.path) && !f.path.startsWith('backend/'))
         .map(f => ({ customer_id: null, file_path: f.path, file_content: f.content, file_type: 'source' }));
 
       // Delete old compiled files and insert new ones

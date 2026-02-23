@@ -17,6 +17,8 @@ const LOCKED_FILES = [
   'backend/modules/billing.js',
   'backend/modules/health.js',
   'backend/db/migrate.js',
+  'backend/db/schema.sql',
+  'backend/routes/index.js',
   'frontend/src/main.jsx',
   'frontend/vite.config.js',
   'frontend/index.html',
@@ -94,7 +96,7 @@ async function generateApp(businessContext, customerId) {
 
   // Save source files to Supabase
   const sourceRows = files
-    .filter(f => !LOCKED_FILES.includes(f.path))
+    .filter(f => !LOCKED_FILES.includes(f.path) && !f.path.startsWith('backend/'))
     .map(f => ({
       customer_id: customerId || null,
       file_path: f.path,

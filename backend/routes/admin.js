@@ -1,12 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { createClient } = require('@supabase/supabase-js');
 const { orchestrate, getBuildStatus } = require('../generator/orchestrate');
+const { getSupabaseClient } = require('../modules/supabase');
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+function getSupabaseOr503(res) {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    res.status(503).json({ error: 'Supabase is not configured' });
+    return null;
+  }
+  return supabase;
+}
 
 function mapAppStatusToBuildStatus(appStatus) {
   if (appStatus === 'live') return 'complete';
@@ -19,6 +23,8 @@ function mapAppStatusToBuildStatus(appStatus) {
 // Get all customers
 router.get('/customers', async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { data, error } = await supabase
       .from('customers')
       .select('*')
@@ -33,6 +39,8 @@ router.get('/customers', async (req, res) => {
 // Create customer from intake
 router.post('/customers', async (req, res) => {
   try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
     const { business_name, business_type, owner_name, owner_email } = req.body;
     if (!business_name || !owner_email) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -78,6 +86,8 @@ router.get('/build-status', async (req, res) => {
   try {
     const { customerId } = req.query;
     if (customerId) {
+      const supabase = getSupabaseOr503(res);
+      if (!supabase) return;
       const { data, error } = await supabase
         .from('customers')
         .select('id, app_status')

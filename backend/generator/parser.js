@@ -88,6 +88,33 @@ function validateFiles(files) {
     }
   }
 
+  // Enforce AgentWidget in every generated dashboard.
+  const dashboard = files.find(f => f.path === 'frontend/src/pages/Dashboard.jsx');
+  if (!dashboard) {
+    errors.push('Missing required file frontend/src/pages/Dashboard.jsx');
+    return errors;
+  }
+
+  const dashboardContent = dashboard.content || '';
+  if (!/import\s*\{\s*[^}]*\buseRef\b[^}]*\}\s*from\s*['"]react['"]/.test(dashboardContent)) {
+    errors.push('Dashboard.jsx must import useRef from react for AgentWidget');
+  }
+  if (!/import\s+axios\s+from\s+['"]axios['"]/.test(dashboardContent)) {
+    errors.push('Dashboard.jsx must import axios for AgentWidget');
+  }
+  if (!dashboardContent.includes('function AgentWidget()')) {
+    errors.push('Dashboard.jsx must define function AgentWidget()');
+  }
+  if (!dashboardContent.includes('<AgentWidget />')) {
+    errors.push('Dashboard.jsx must render <AgentWidget />');
+  }
+  if (!dashboardContent.includes('/api/agent/chat')) {
+    errors.push('Dashboard.jsx AgentWidget must call /api/agent/chat');
+  }
+  if (!dashboardContent.includes('/api/agent/upload')) {
+    errors.push('Dashboard.jsx AgentWidget must call /api/agent/upload');
+  }
+
   return errors;
 }
 

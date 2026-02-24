@@ -9,6 +9,8 @@ const { restoreCompiledFilesToDisk } = require('../modules/restore-generated');
 const ADMIN_PANEL_PASSWORD = process.env.ADMIN_PANEL_PASSWORD || 'nite-admin-2026';
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET || 'dev-admin-secret-change-me';
 const ADMIN_SESSION_TTL = process.env.ADMIN_SESSION_TTL || '12h';
+const ALLOWED_BILLING_TIERS = new Set(['starter', 'growth', 'pro']);
+const ALLOWED_CUSTOMER_STATUSES = new Set(['active', 'trial', 'inactive']);
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -31,6 +33,14 @@ function readBearerToken(headerValue) {
   const raw = String(headerValue || '').trim();
   if (!raw.toLowerCase().startsWith('bearer ')) return '';
   return raw.slice(7).trim();
+}
+
+function normalizeTier(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeCustomerStatus(value) {
+  return String(value || '').trim().toLowerCase();
 }
 
 function generateAdminToken() {
@@ -319,6 +329,92 @@ router.get('/customers', requireAdminAuth, async (req, res) => {
       .order('created_at', { ascending: false });
     if (error) throw error;
     res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/customers/:id/billing', requireAdminAuth, async (req, res) => {
+  try {
+    const supabase = getSupabaseOr503(res);
+    if (!supabase) return;
+
+    const customerId = String(req.params.id || '').trim();
+    if (!customerId) {
+      return res.status(400).json({ error: 'customer id is required' });
+    }
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const patch = {};
+
+    if (body.tier !== undefined) {
+      const tier = normalizeTier(body.tier);
+      if (!ALLOWED_BILLING_TIERS.has(tier)) {
+        return res.status(400).json({
+          error: 'tier must be one of starter, growth, or pro'
+        });
+      }
+      patch.tier = tier;
+    }
+
+    if (body.status !== undefined) {
+      const status = normalizeCustomerStatus(body.status);
+      if (!ALLOWED_CUSTOMER_STATUSES.has(status)) {
+        return res.status(400).json({
+          error: 'status must be one of active, trial, or inactive'
+        });
+      }
+      patch.status = status;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({
+        error: 'Provide at least one field to update: tier or status'
+      });
+    }
+
+    const existingLookup = await supabase
+      .from('customers')
+      .select('id, business_name, tier, status')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (existingLookup.error) throw existingLookup.error;
+    if (!existingLookup.data) {
+      return res.status(404).json({ error: 'customer not found' });
+    }
+
+    const before = existingLookup.data;
+    const beforeTier = normalizeTier(before.tier || 'growth');
+    const beforeStatus = normalizeCustomerStatus(before.status || 'active');
+    const nextTier = patch.tier || beforeTier;
+    const nextStatus = patch.status || beforeStatus;
+
+    const { data, error } = await supabase
+      .from('customers')
+      .update({ tier: nextTier, status: nextStatus })
+      .eq('id', customerId)
+      .select('*')
+      .single();
+    if (error) throw error;
+
+    if (nextTier !== beforeTier || nextStatus !== beforeStatus) {
+      await logAdminEvent(supabase, {
+        customerId,
+        eventType: 'billing_updated',
+        actor: 'admin_panel',
+        payload: {
+          before: { tier: beforeTier, status: beforeStatus },
+          after: { tier: nextTier, status: nextStatus }
+        },
+        message: `Updated billing to ${nextTier.toUpperCase()} (${nextStatus.toUpperCase()})`
+      });
+    }
+
+    res.json({
+      success: true,
+      customer: data,
+      updated: nextTier !== beforeTier || nextStatus !== beforeStatus
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

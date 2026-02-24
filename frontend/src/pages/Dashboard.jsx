@@ -39,6 +39,58 @@ const DEFAULT_SETTINGS_DRAFT = {
   }
 };
 
+const DASHBOARD_TABS = [
+  { key: 'appointments', label: 'Appointments', feature: 'dashboard.appointments' },
+  { key: 'clients', label: 'Clients', feature: 'dashboard.clients' },
+  { key: 'staff', label: 'Staff', feature: 'dashboard.staff' },
+  { key: 'services', label: 'Services', feature: 'dashboard.services' },
+  { key: 'settings', label: 'Settings', feature: 'dashboard.settings' },
+  { key: 'legal', label: 'Legal', feature: 'dashboard.legal' },
+  { key: 'revenue', label: 'Revenue', feature: 'dashboard.revenue' }
+];
+
+const FEATURE_LABELS = {
+  'dashboard.appointments': 'Appointments',
+  'dashboard.clients': 'Clients',
+  'dashboard.services': 'Services',
+  'dashboard.staff': 'Staff management',
+  'dashboard.settings': 'Business settings',
+  'dashboard.legal': 'Legal page editor',
+  'dashboard.revenue': 'Revenue analytics',
+  'dashboard.agent': 'AI site assistant'
+};
+
+const DEFAULT_BILLING = {
+  tier: 'growth',
+  status: 'active',
+  features: {
+    'dashboard.appointments': true,
+    'dashboard.clients': true,
+    'dashboard.services': true,
+    'dashboard.staff': true,
+    'dashboard.settings': true,
+    'dashboard.legal': true,
+    'dashboard.revenue': false,
+    'dashboard.agent': true
+  },
+  requirements: {
+    'dashboard.appointments': 'starter',
+    'dashboard.clients': 'starter',
+    'dashboard.services': 'starter',
+    'dashboard.staff': 'growth',
+    'dashboard.settings': 'growth',
+    'dashboard.legal': 'growth',
+    'dashboard.revenue': 'pro',
+    'dashboard.agent': 'growth'
+  }
+};
+
+const TIER_LABELS = {
+  starter: 'Starter',
+  growth: 'Growth',
+  pro: 'Pro'
+};
+
 function AgentWidget() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([{ from: 'agent', text: "Hi! I'm your site assistant. Ask me to change anything on your site — text, colors, images, services." }]);
@@ -69,8 +121,9 @@ function AgentWidget() {
       const agentMsg = { from: 'agent', text: `${r.data.reply}${contextNote}`, rebuilt: r.data.rebuilt, filesChanged: r.data.filesChanged };
       setMessages(prev => [...prev, agentMsg]);
       setHistory(prev => [...prev, { role: 'assistant', content: r.data.reply }]);
-    } catch {
-      setMessages(prev => [...prev, { from: 'agent', text: 'Something went wrong. Please try again.' }]);
+    } catch (err) {
+      const message = err?.response?.data?.error || 'Something went wrong. Please try again.';
+      setMessages(prev => [...prev, { from: 'agent', text: message }]);
     }
     setThinking(false);
   };
@@ -85,8 +138,9 @@ function AgentWidget() {
       const r = await axios.post('/api/agent/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setImageUrl(r.data.url);
       setMessages(prev => [...prev, { from: 'agent', text: 'Image uploaded! Now tell me where to use it.' }]);
-    } catch {
-      setMessages(prev => [...prev, { from: 'agent', text: 'Upload failed. Try again.' }]);
+    } catch (err) {
+      const message = err?.response?.data?.error || 'Upload failed. Try again.';
+      setMessages(prev => [...prev, { from: 'agent', text: message }]);
     }
     setUploading(false);
   };
@@ -191,12 +245,77 @@ export default function Dashboard() {
   const [settingsDraft, setSettingsDraft] = useState(DEFAULT_SETTINGS_DRAFT);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState('');
+  const [billing, setBilling] = useState(DEFAULT_BILLING);
+  const [billingMessage, setBillingMessage] = useState('');
 
   const api = (url, opts = {}) => axios({ url, ...opts, headers: { Authorization: `Bearer ${token}`, ...opts.headers } });
+
+  const applyBillingPayload = (payload) => {
+    const source = payload?.billing && typeof payload.billing === 'object' ? payload.billing : payload;
+    if (!source || typeof source !== 'object') return;
+    const next = {
+      tier: String(source.tier || DEFAULT_BILLING.tier).toLowerCase(),
+      status: String(source.status || DEFAULT_BILLING.status).toLowerCase(),
+      features: {
+        ...DEFAULT_BILLING.features,
+        ...(source.features && typeof source.features === 'object' ? source.features : {})
+      },
+      requirements: {
+        ...DEFAULT_BILLING.requirements,
+        ...(source.requirements && typeof source.requirements === 'object' ? source.requirements : {})
+      }
+    };
+    setBilling(next);
+  };
+
+  const featureEnabled = (featureKey) => {
+    if (!['active', 'trial'].includes(String(billing.status || '').toLowerCase())) return false;
+    if (!featureKey) return true;
+    return billing.features?.[featureKey] !== false;
+  };
+
+  const formatTierLabel = (tier) => TIER_LABELS[String(tier || '').toLowerCase()] || String(tier || 'Growth');
+
+  const describeBillingError = (payload, fallbackFeatureKey = '') => {
+    if (payload?.code === 'subscription_inactive') {
+      return 'Your subscription is inactive. Reactivate billing to use dashboard features.';
+    }
+    if (payload?.code === 'plan_upgrade_required') {
+      const featureKey = payload?.feature || fallbackFeatureKey;
+      const featureLabel = FEATURE_LABELS[featureKey] || 'This feature';
+      const requiredTier = formatTierLabel(payload?.required_tier || billing.requirements?.[featureKey] || 'growth');
+      return `${featureLabel} requires the ${requiredTier} plan.`;
+    }
+    return payload?.error || 'This action is unavailable on your current plan.';
+  };
+
+  const handleBillingError = (err, fallbackMessage, fallbackFeatureKey = '') => {
+    const statusCode = err?.response?.status;
+    const payload = err?.response?.data;
+    if (statusCode === 402) {
+      applyBillingPayload(payload);
+      const nextMessage = describeBillingError(payload, fallbackFeatureKey);
+      setBillingMessage(nextMessage);
+      return nextMessage;
+    }
+    return fallbackMessage;
+  };
+
+  const loadBilling = async () => {
+    if (!token) return null;
+    try {
+      const r = await api('/api/dashboard/plan');
+      applyBillingPayload(r?.data);
+      return r?.data?.billing || null;
+    } catch (err) {
+      return null;
+    }
+  };
 
   const login = async (e) => {
     e.preventDefault();
     setLoginError('');
+    setBillingMessage('');
     try {
       const r = await axios.post('/api/auth/login', loginForm);
       const t = r.data.token;
@@ -207,7 +326,17 @@ export default function Dashboard() {
     }
   };
 
-  const logout = () => { setToken(''); localStorage.removeItem(TOKEN_KEY); };
+  const logout = () => {
+    setToken('');
+    setBilling(DEFAULT_BILLING);
+    setBillingMessage('');
+    localStorage.removeItem(TOKEN_KEY);
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    loadBilling();
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
@@ -229,6 +358,18 @@ export default function Dashboard() {
   };
 
   const fetchTab = async (t) => {
+    setBillingMessage('');
+    const tabConfig = DASHBOARD_TABS.find((entry) => entry.key === t);
+    const subscriptionInactive = !['active', 'trial'].includes(String(billing.status || '').toLowerCase());
+    if (subscriptionInactive) {
+      setBillingMessage('Your subscription is inactive. Reactivate billing to use dashboard features.');
+      return;
+    }
+    if (tabConfig?.feature && !featureEnabled(tabConfig.feature)) {
+      const requiredTier = formatTierLabel(billing.requirements?.[tabConfig.feature] || 'growth');
+      setBillingMessage(`${tabConfig.label} requires the ${requiredTier} plan.`);
+      return;
+    }
     setLoading(true);
     try {
       if (t === 'appointments') {
@@ -275,7 +416,9 @@ export default function Dashboard() {
         const r = await api('/api/dashboard/revenue');
         setRevenue(r.data);
       }
-    } catch { }
+    } catch (err) {
+      handleBillingError(err, '', tabConfig?.feature || '');
+    }
     setLoading(false);
   };
 
@@ -283,7 +426,9 @@ export default function Dashboard() {
     try {
       await api(`/api/dashboard/appointments/${id}`, { method: 'PATCH', data: { status } });
       setAppointments(prev => prev.map(a => a.id === id ? { ...a, status } : a));
-    } catch { }
+    } catch (err) {
+      handleBillingError(err, '', 'dashboard.appointments');
+    }
   };
 
   const statusColor = (s) => ({
@@ -315,8 +460,8 @@ export default function Dashboard() {
       hydrateServiceEdits(next);
       setNewService({ name: '', price: '', duration_minutes: '60', description: '' });
       setServiceMessage(`Added service: ${r.data.name}`);
-    } catch {
-      setServiceMessage('Failed to add service.');
+    } catch (err) {
+      setServiceMessage(handleBillingError(err, 'Failed to add service.', 'dashboard.services'));
     }
     setServiceBusy(false);
   };
@@ -348,8 +493,8 @@ export default function Dashboard() {
       setServices(next);
       hydrateServiceEdits(next);
       setServiceMessage(`Saved: ${r.data.name}`);
-    } catch {
-      setServiceMessage('Failed to save service.');
+    } catch (err) {
+      setServiceMessage(handleBillingError(err, 'Failed to save service.', 'dashboard.services'));
     }
     setServiceBusy(false);
   };
@@ -363,8 +508,8 @@ export default function Dashboard() {
       setServices(next);
       hydrateServiceEdits(next);
       setServiceMessage('Service removed.');
-    } catch {
-      setServiceMessage('Failed to remove service.');
+    } catch (err) {
+      setServiceMessage(handleBillingError(err, 'Failed to remove service.', 'dashboard.services'));
     }
     setServiceBusy(false);
   };
@@ -396,8 +541,8 @@ export default function Dashboard() {
         }
       });
       setLegalMessage(`Saved ${key} page.`);
-    } catch {
-      setLegalMessage(`Failed to save ${key} page.`);
+    } catch (err) {
+      setLegalMessage(handleBillingError(err, `Failed to save ${key} page.`, 'dashboard.legal'));
     }
     setLegalBusyKey('');
   };
@@ -418,8 +563,8 @@ export default function Dashboard() {
         }));
       }
       setLegalMessage(`Restored default ${key} page.`);
-    } catch {
-      setLegalMessage(`Failed to restore ${key} page.`);
+    } catch (err) {
+      setLegalMessage(handleBillingError(err, `Failed to restore ${key} page.`, 'dashboard.legal'));
     }
     setLegalBusyKey('');
   };
@@ -481,8 +626,8 @@ export default function Dashboard() {
         }
       });
       setSettingsMessage('Settings saved. Public site updates are now live.');
-    } catch {
-      setSettingsMessage('Failed to save settings.');
+    } catch (err) {
+      setSettingsMessage(handleBillingError(err, 'Failed to save settings.', 'dashboard.settings'));
     }
     setSettingsBusy(false);
   };
@@ -504,8 +649,6 @@ export default function Dashboard() {
       </div>
     </div>
   );
-
-  const tabs = ['appointments', 'clients', 'staff', 'services', 'settings', 'legal', 'revenue'];
 
   return (
     <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", background: '#0a0a08', minHeight: '100vh', color: '#e8e0d4' }}>
@@ -532,19 +675,54 @@ export default function Dashboard() {
           <div style={{ fontSize: '18px', fontWeight: 300, letterSpacing: '4px', textTransform: 'uppercase' }}>Nite Salon</div>
           <div className="mono" style={{ fontSize: '9px', letterSpacing: '3px', color: '#c9a96e' }}>OPERATIONS DASHBOARD</div>
         </div>
-        <button onClick={logout} style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#666', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '2px', padding: '8px 20px', cursor: 'pointer' }}>Sign Out</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div className="mono" style={{ fontSize: '10px', color: '#888', letterSpacing: '2px' }}>
+            PLAN: <span style={{ color: '#c9a96e' }}>{formatTierLabel(billing.tier).toUpperCase()}</span>
+            {billing.status !== 'active' && (
+              <span style={{ color: '#e07070' }}> · {String(billing.status || '').toUpperCase()}</span>
+            )}
+          </div>
+          <button onClick={logout} style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#666', fontFamily: 'Montserrat', fontSize: '10px', letterSpacing: '2px', padding: '8px 20px', cursor: 'pointer' }}>Sign Out</button>
+        </div>
       </div>
 
       {/* TABS */}
       <div style={{ padding: '0 40px', borderBottom: '1px solid #1a1a14', display: 'flex', gap: '32px' }}>
-        {tabs.map(t => (
-          <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
+        {DASHBOARD_TABS.map((tabConfig) => {
+          const locked = !featureEnabled(tabConfig.feature);
+          const requiredTier = formatTierLabel(billing.requirements?.[tabConfig.feature] || 'growth');
+          return (
+            <button
+              key={tabConfig.key}
+              className={`tab-btn ${tab === tabConfig.key ? 'active' : ''}`}
+              onClick={() => {
+                if (locked) {
+                  if (!['active', 'trial'].includes(String(billing.status || '').toLowerCase())) {
+                    setBillingMessage('Your subscription is inactive. Reactivate billing to use dashboard features.');
+                    return;
+                  }
+                  setBillingMessage(`${tabConfig.label} requires the ${requiredTier} plan.`);
+                  return;
+                }
+                setBillingMessage('');
+                setTab(tabConfig.key);
+              }}
+              style={{ opacity: locked ? 0.45 : 1 }}
+              title={locked ? `${tabConfig.label} requires the ${requiredTier} plan` : ''}
+            >
+              {tabConfig.label}
+              {locked ? ' (LOCKED)' : ''}
+            </button>
+          );
+        })}
       </div>
 
       <div style={{ padding: '32px 40px' }}>
+        {billingMessage && (
+          <div className="mono" style={{ fontSize: '11px', color: '#c9a96e', marginBottom: '14px', letterSpacing: '1px' }}>
+            {billingMessage}
+          </div>
+        )}
 
         {/* APPOINTMENTS */}
         {tab === 'appointments' && (
@@ -901,7 +1079,7 @@ export default function Dashboard() {
           </div>
         )}
       </div>
-      <AgentWidget />
+      {featureEnabled('dashboard.agent') && <AgentWidget />}
     </div>
   );
 }

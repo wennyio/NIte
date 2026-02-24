@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 
 const ADMIN_TOKEN_KEY = 'nite_admin_token';
+const BILLING_TIERS = ['starter', 'growth', 'pro'];
+const CUSTOMER_STATUSES = ['active', 'trial', 'inactive'];
 
 export default function CommandCenter() {
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -19,6 +21,19 @@ export default function CommandCenter() {
   const [routingDrafts, setRoutingDrafts] = useState({});
   const [routingBusyId, setRoutingBusyId] = useState('');
   const [routingMessage, setRoutingMessage] = useState('');
+  const [billingDrafts, setBillingDrafts] = useState({});
+  const [billingBusyId, setBillingBusyId] = useState('');
+  const [billingMessage, setBillingMessage] = useState('');
+
+  const normalizeTier = (tier) => {
+    const normalized = String(tier || '').trim().toLowerCase();
+    return BILLING_TIERS.includes(normalized) ? normalized : 'growth';
+  };
+
+  const normalizeCustomerStatus = (status) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    return CUSTOMER_STATUSES.includes(normalized) ? normalized : 'active';
+  };
 
   const authHeaders = (tokenValue = adminToken) => (
     tokenValue ? { Authorization: `Bearer ${tokenValue}` } : {}
@@ -50,10 +65,16 @@ export default function CommandCenter() {
       const list = Array.isArray(custRes.data) ? custRes.data : [];
       setCustomers(list);
       const drafts = {};
+      const billing = {};
       list.forEach((c) => {
         drafts[c.id] = c.container_url || '';
+        billing[c.id] = {
+          tier: normalizeTier(c.tier),
+          status: normalizeCustomerStatus(c.status)
+        };
       });
       setRoutingDrafts(drafts);
+      setBillingDrafts(billing);
       setBuilds(buildRes.data || null);
       setAnalytics(analyticsRes.data || null);
       setEvents(Array.isArray(eventsRes.data) ? eventsRes.data : []);
@@ -148,8 +169,8 @@ export default function CommandCenter() {
         { container_url: (routingDrafts[customerId] || '').trim() },
         { headers: authHeaders() }
       );
-      setRoutingMessage('Routing updated.');
       await fetchData();
+      setRoutingMessage('Routing updated.');
     } catch (err) {
       if (err?.response?.status === 401 || err?.response?.status === 403) {
         handleUnauthorized();
@@ -159,6 +180,37 @@ export default function CommandCenter() {
       }
     }
     setRoutingBusyId('');
+  };
+
+  const saveBilling = async (customerId) => {
+    if (!customerId || !adminToken) return;
+    const draft = billingDrafts[customerId] || {};
+    const tier = normalizeTier(draft.tier);
+    const status = normalizeCustomerStatus(draft.status);
+    setBillingBusyId(customerId);
+    setBillingMessage('');
+    try {
+      const response = await axios.patch(
+        `/admin/customers/${customerId}/billing`,
+        { tier, status },
+        { headers: authHeaders() }
+      );
+      await fetchData();
+      const updated = response?.data?.updated !== false;
+      setBillingMessage(
+        updated
+          ? `Billing updated to ${tier.toUpperCase()} (${status.toUpperCase()}).`
+          : 'Billing already up to date.'
+      );
+    } catch (err) {
+      if (err?.response?.status === 401 || err?.response?.status === 403) {
+        handleUnauthorized();
+      } else {
+        const msg = err?.response?.data?.error || 'Failed to update billing.';
+        setBillingMessage(msg);
+      }
+    }
+    setBillingBusyId('');
   };
 
   const tierColor = (tier) => ({
@@ -336,44 +388,98 @@ export default function CommandCenter() {
             <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: '10px', letterSpacing: '3px', color: '#555' }}>ALL CUSTOMERS — {customers.length} TOTAL</div>
             </div>
+            {billingMessage && (
+              <div style={{ marginBottom: '14px', fontSize: '11px', color: '#6ec9a9', letterSpacing: '1px' }}>{billingMessage}</div>
+            )}
             {routingMessage && (
               <div style={{ marginBottom: '14px', fontSize: '11px', color: '#c9a96e', letterSpacing: '1px' }}>{routingMessage}</div>
             )}
             <table>
-              <thead><tr><th>Business</th><th>Type</th><th>Owner</th><th>Email</th><th>Tier</th><th>Status</th><th>Subdomain</th><th>Routing</th><th>Created</th></tr></thead>
+              <thead><tr><th>Business</th><th>Type</th><th>Owner</th><th>Email</th><th>Tier</th><th>Status</th><th>Billing</th><th>Subdomain</th><th>Routing</th><th>Created</th></tr></thead>
               <tbody>
                 {customers.length === 0 && (
-                  <tr><td colSpan={9} style={{ color: '#333', fontStyle: 'italic', textAlign: 'center', padding: '40px' }}>No customers yet</td></tr>
+                  <tr><td colSpan={10} style={{ color: '#333', fontStyle: 'italic', textAlign: 'center', padding: '40px' }}>No customers yet</td></tr>
                 )}
-                {customers.map((c) => (
-                  <tr key={c.id}>
-                    <td style={{ fontWeight: 500 }}>{c.business_name}</td>
-                    <td style={{ color: '#888', fontSize: '12px' }}>{c.business_type || '—'}</td>
-                    <td style={{ fontSize: '12px' }}>{c.owner_name || '—'}</td>
-                    <td style={{ fontSize: '12px', color: '#888' }}>{c.owner_email || '—'}</td>
-                    <td><span className="badge" style={{ color: tierColor(c.tier), border: `1px solid ${tierColor(c.tier)}44` }}>{c.tier?.toUpperCase() || 'STARTER'}</span></td>
-                    <td><span className="badge" style={{ color: statusColor(c.status), border: `1px solid ${statusColor(c.status)}44` }}>{c.status?.toUpperCase() || 'ACTIVE'}</span></td>
-                    <td style={{ fontSize: '12px', color: '#c9a96e' }}>{c.subdomain || '—'}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input
-                          value={routingDrafts[c.id] || ''}
-                          onChange={(e) => setRoutingDrafts((prev) => ({ ...prev, [c.id]: e.target.value }))}
-                          placeholder="https://customer-app.example.com"
-                          style={{ background: '#12120e', border: '1px solid #2a2a22', color: '#e8e0d4', padding: '6px 8px', fontSize: '11px', width: '240px', fontFamily: 'Montserrat' }}
-                        />
-                        <button
-                          onClick={() => saveRouting(c.id)}
-                          disabled={routingBusyId === c.id}
-                          style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#c9a96e', fontSize: '9px', letterSpacing: '1px', padding: '5px 8px', cursor: 'pointer', opacity: routingBusyId === c.id ? 0.6 : 1 }}
+                {customers.map((c) => {
+                  const billingDraft = billingDrafts[c.id] || {
+                    tier: normalizeTier(c.tier),
+                    status: normalizeCustomerStatus(c.status)
+                  };
+                  const billingUnchanged = (
+                    billingDraft.tier === normalizeTier(c.tier) &&
+                    billingDraft.status === normalizeCustomerStatus(c.status)
+                  );
+                  return (
+                    <tr key={c.id}>
+                      <td style={{ fontWeight: 500 }}>{c.business_name}</td>
+                      <td style={{ color: '#888', fontSize: '12px' }}>{c.business_type || '—'}</td>
+                      <td style={{ fontSize: '12px' }}>{c.owner_name || '—'}</td>
+                      <td style={{ fontSize: '12px', color: '#888' }}>{c.owner_email || '—'}</td>
+                      <td>
+                        <select
+                          value={billingDraft.tier}
+                          onChange={(e) => setBillingDrafts((prev) => ({
+                            ...prev,
+                            [c.id]: {
+                              ...billingDraft,
+                              tier: e.target.value
+                            }
+                          }))}
+                          style={{ background: '#12120e', border: '1px solid #2a2a22', color: tierColor(billingDraft.tier), padding: '6px 8px', fontSize: '11px', fontFamily: 'Montserrat', minWidth: '96px' }}
                         >
-                          {routingBusyId === c.id ? 'SAVING...' : 'SAVE'}
+                          {BILLING_TIERS.map((tier) => (
+                            <option key={tier} value={tier}>{tier.toUpperCase()}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <select
+                          value={billingDraft.status}
+                          onChange={(e) => setBillingDrafts((prev) => ({
+                            ...prev,
+                            [c.id]: {
+                              ...billingDraft,
+                              status: e.target.value
+                            }
+                          }))}
+                          style={{ background: '#12120e', border: '1px solid #2a2a22', color: statusColor(billingDraft.status), padding: '6px 8px', fontSize: '11px', fontFamily: 'Montserrat', minWidth: '96px' }}
+                        >
+                          {CUSTOMER_STATUSES.map((status) => (
+                            <option key={status} value={status}>{status.toUpperCase()}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => saveBilling(c.id)}
+                          disabled={billingBusyId === c.id || billingUnchanged}
+                          style={{ background: 'transparent', border: `1px solid ${billingUnchanged ? '#2a2a22' : '#6ec9a9'}`, color: billingUnchanged ? '#666' : '#6ec9a9', fontSize: '9px', letterSpacing: '1px', padding: '5px 8px', cursor: billingUnchanged ? 'default' : 'pointer', opacity: billingBusyId === c.id ? 0.6 : 1 }}
+                        >
+                          {billingBusyId === c.id ? 'SAVING...' : billingUnchanged ? 'SYNCED' : 'SAVE PLAN'}
                         </button>
-                      </div>
-                    </td>
-                    <td style={{ fontSize: '11px', color: '#555' }}>{c.created_at?.split('T')[0] || '—'}</td>
-                  </tr>
-                ))}
+                      </td>
+                      <td style={{ fontSize: '12px', color: '#c9a96e' }}>{c.subdomain || '—'}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <input
+                            value={routingDrafts[c.id] || ''}
+                            onChange={(e) => setRoutingDrafts((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                            placeholder="https://customer-app.example.com"
+                            style={{ background: '#12120e', border: '1px solid #2a2a22', color: '#e8e0d4', padding: '6px 8px', fontSize: '11px', width: '240px', fontFamily: 'Montserrat' }}
+                          />
+                          <button
+                            onClick={() => saveRouting(c.id)}
+                            disabled={routingBusyId === c.id}
+                            style={{ background: 'transparent', border: '1px solid #2a2a22', color: '#c9a96e', fontSize: '9px', letterSpacing: '1px', padding: '5px 8px', cursor: 'pointer', opacity: routingBusyId === c.id ? 0.6 : 1 }}
+                          >
+                            {routingBusyId === c.id ? 'SAVING...' : 'SAVE'}
+                          </button>
+                        </div>
+                      </td>
+                      <td style={{ fontSize: '11px', color: '#555' }}>{c.created_at?.split('T')[0] || '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

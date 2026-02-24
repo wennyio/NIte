@@ -41,6 +41,111 @@ function normalizePath(filePath) {
     .replace(/^\.?\//, '');
 }
 
+function getHostAndPort(rawHost) {
+  const normalized = String(rawHost || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .split('/')[0];
+  if (!normalized) return { host: '', port: '' };
+  const [host, port] = normalized.split(':');
+  return { host: host || '', port: port || '' };
+}
+
+function getPlatformHostInfo(req) {
+  const configured = [
+    process.env.PLATFORM_BASE_HOST,
+    process.env.RAILWAY_PUBLIC_DOMAIN,
+    process.env.RAILWAY_STATIC_URL
+  ];
+  for (const value of configured) {
+    const parsed = getHostAndPort(value);
+    if (parsed.host) {
+      return { baseHost: parsed.host, localPort: '' };
+    }
+  }
+
+  const forwarded = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const hostHeader = forwarded || String(req.headers.host || '');
+  const parsed = getHostAndPort(hostHeader);
+  if (!parsed.host) return { baseHost: '', localPort: '' };
+
+  if (parsed.host === 'localhost' || parsed.host.endsWith('.localhost')) {
+    return {
+      baseHost: 'localhost',
+      localPort: parsed.port || String(req.headers['x-forwarded-port'] || '').trim() || '3000'
+    };
+  }
+
+  const parts = parsed.host.split('.').filter(Boolean);
+  if (parts.length >= 3) {
+    return { baseHost: parts.slice(1).join('.'), localPort: '' };
+  }
+  return { baseHost: parsed.host, localPort: '' };
+}
+
+function resolveLiveBusinessUrl(req, customer) {
+  const containerUrl = String(customer?.container_url || '').trim();
+  if (containerUrl) {
+    try {
+      return new URL(containerUrl).origin;
+    } catch {
+      // Ignore invalid stored URL and continue fallback resolution.
+    }
+  }
+
+  const subdomain = String(customer?.subdomain || '').trim().toLowerCase();
+  if (!subdomain) return null;
+
+  const { baseHost, localPort } = getPlatformHostInfo(req);
+  if (!baseHost) return null;
+  if (baseHost === 'localhost') {
+    return `http://${subdomain}.localhost${localPort ? `:${localPort}` : ''}`;
+  }
+  return `https://${subdomain}.${baseHost}`;
+}
+
+function parseAgentResponse(rawResponse) {
+  const raw = String(rawResponse || '');
+  const fileMarker = '===FILE:';
+  const firstFileIndex = raw.indexOf(fileMarker);
+  let reply = firstFileIndex > -1
+    ? raw.substring(0, firstFileIndex).trim()
+    : raw.trim();
+  reply = reply.replace(/===REBUILD===/g, '').trim();
+
+  const filesChanged = [];
+  const seen = new Set();
+  const fileRegex = /===FILE:\s*(.+?)\s*===/g;
+  let match;
+  while ((match = fileRegex.exec(raw)) !== null) {
+    const filePath = normalizePath(match[1]);
+    if (!filePath || seen.has(filePath)) continue;
+    seen.add(filePath);
+    filesChanged.push(filePath);
+  }
+
+  if (!reply || reply.length < 10) {
+    reply = filesChanged.length > 0
+      ? 'Your site has been built! Keep chatting to make changes.'
+      : 'Update complete. Keep chatting to make changes.';
+  }
+
+  return { reply, filesChanged };
+}
+
+function extractChangedPathsFromGeneratedFiles(files) {
+  const paths = [];
+  const seen = new Set();
+  for (const file of Array.isArray(files) ? files : []) {
+    const filePath = normalizePath(file?.path);
+    if (!filePath || seen.has(filePath)) continue;
+    seen.add(filePath);
+    paths.push(filePath);
+  }
+  return paths;
+}
+
 function buildCustomerScopedQuery(query, customerId) {
   return customerId ? query.eq('customer_id', customerId) : query.is('customer_id', null);
 }
@@ -461,25 +566,29 @@ router.post('/chat', async (req, res) => {
       }
     }
 
+    const { files: currentFiles, targetCustomerId, liveCustomer } = await getCurrentFiles(supabase);
+    const contextCustomer = req.tenant?.id ? req.tenant : liveCustomer;
+    const responseCustomerId = req.tenant?.id || targetCustomerId || liveCustomer?.id || null;
+    const liveBusiness = resolveLiveBusinessUrl(req, contextCustomer);
+    const liveBusinessName = contextCustomer?.business_name || liveCustomer?.business_name || 'Unknown business';
+
     if (catalogResult && !hasVisualIntent(message, imageUrl)) {
       return res.json({
         reply: `${catalogResult.summary} Refresh the page to see updated services and prices.`,
         rebuilt: false,
-        filesChanged: 0,
-        liveBusiness: null,
-        customerId: null
+        filesChanged: [],
+        liveBusiness,
+        customerId: responseCustomerId
       });
     }
 
-    const { files: currentFiles, targetCustomerId, liveCustomer } = await getCurrentFiles(supabase);
-    const liveBusiness = liveCustomer?.business_name || 'Unknown business';
     const catalogPromptContext = catalogResult
       ? `\n\nCatalog data update already applied at DB level: ${catalogResult.summary}\nDo not fake service changes in fallback arrays. Keep frontend rendering from /api/services.\n`
       : '';
 
     const systemPrompt = `You are an AI assistant embedded in a business owner's website dashboard. You help them edit and improve their live website.
 
-Current live business context: ${liveBusiness}
+Current live business context: ${liveBusinessName}
 
 You have access to the current source files of their website. When the owner asks you to make a change, you can either:
 1. RESPOND with helpful advice or answer their question (most messages)
@@ -508,9 +617,10 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
     const userMessage = imageUrl
       ? `${message}\n\nImage URL to use: ${imageUrl}`
       : message;
+    const safeConversationHistory = Array.isArray(conversationHistory) ? conversationHistory : [];
 
     const messages = [
-      ...conversationHistory.slice(-10), // keep last 10 messages for context
+      ...safeConversationHistory.slice(-10), // keep last 10 messages for context
       { role: 'user', content: userMessage }
     ];
 
@@ -533,10 +643,14 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
     if (data.error) throw new Error(data.error.message);
 
     const rawOutput = data.content.map(b => b.text || '').join('\n');
-    const shouldRebuild = rawOutput.includes('===REBUILD===');
+    const parsedResponse = parseAgentResponse(rawOutput);
+    const generatedFiles = parseGeneratedOutput(rawOutput);
+    const generatedPaths = extractChangedPathsFromGeneratedFiles(generatedFiles);
+    const filesChanged = generatedPaths.length > 0 ? generatedPaths : parsedResponse.filesChanged;
+    const shouldRebuild = filesChanged.length > 0;
 
     if (shouldRebuild) {
-      const persistCustomerId = targetCustomerId || null;
+      const persistCustomerId = responseCustomerId || null;
       try {
         await createRevisionSnapshot(
           supabase,
@@ -549,9 +663,7 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       }
 
       // Parse and write changed files
-      const files = parseGeneratedOutput(rawOutput);
-
-      for (const file of files) {
+      for (const file of generatedFiles) {
         const normalizedPath = normalizePath(file.path);
         if (!normalizedPath || LOCKED_FILES.includes(normalizedPath)) continue;
         const fullPath = path.resolve(BASE_DIR, normalizedPath);
@@ -601,30 +713,25 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       const allRows = [...sourceRows, ...compiledRows];
       await replaceGeneratedRowsForCustomer(supabase, persistCustomerId, allRows);
 
-      // Clean response text (remove file blocks)
-      const cleanResponse = rawOutput
-        .replace(/===FILE:[\s\S]*?===END FILE===/g, '')
-        .replace(/===REBUILD===/g, '')
-        .trim() || "Done! Your site has been updated. Refresh to see the changes.";
-      const reply = catalogResult ? `${cleanResponse}\n\n${catalogResult.summary}` : cleanResponse;
+      const reply = catalogResult ? `${parsedResponse.reply}\n\n${catalogResult.summary}` : parsedResponse.reply;
 
       return res.json({
         reply,
         rebuilt: true,
-        filesChanged: files.length,
+        filesChanged,
         liveBusiness,
         customerId: persistCustomerId
       });
     }
 
     // Just a conversation response
-    const cleanResponse = rawOutput.trim();
-    const reply = catalogResult ? `${cleanResponse}\n\n${catalogResult.summary}` : cleanResponse;
-    res.json({
+    const reply = catalogResult ? `${parsedResponse.reply}\n\n${catalogResult.summary}` : parsedResponse.reply;
+    return res.json({
       reply,
       rebuilt: false,
+      filesChanged: [],
       liveBusiness,
-      customerId: targetCustomerId || null
+      customerId: responseCustomerId
     });
 
   } catch (err) {

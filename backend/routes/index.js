@@ -24,6 +24,11 @@ const {
   normalizeHours
 } = require('../modules/business-profile');
 const { isResendConfigured, sendBookingEmails } = require('../modules/mailer');
+const {
+  FEATURE_MIN_TIER,
+  getBillingSnapshot,
+  evaluateFeatureAccess
+} = require('../modules/billing');
 
 function getSupabaseOr503(res) {
   const supabase = getSupabaseClient();
@@ -59,7 +64,7 @@ async function getLiveCustomer(supabase) {
 
   const detailed = await supabase
     .from('customers')
-    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status, tier')
     .eq('id', liveCustomer.id)
     .maybeSingle();
   if (detailed.error) return liveCustomer;
@@ -70,7 +75,7 @@ async function getCustomerById(supabase, customerId) {
   if (!customerId) return null;
   const detailed = await supabase
     .from('customers')
-    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+    .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status, tier')
     .eq('id', customerId)
     .maybeSingle();
   if (detailed.error) return null;
@@ -89,6 +94,63 @@ async function getContextCustomer(supabase, req) {
 async function getLiveCustomerId(supabase, req) {
   const liveCustomer = await getContextCustomer(supabase, req);
   return liveCustomer?.id || null;
+}
+
+function buildBillingResponsePayload(snapshot) {
+  return {
+    tier: snapshot.tier,
+    status: snapshot.status,
+    features: snapshot.features,
+    requirements: FEATURE_MIN_TIER
+  };
+}
+
+function sendBillingAccessError(res, featureKey, access, snapshot) {
+  const requiredTier = access.requiredTier || FEATURE_MIN_TIER[featureKey] || 'starter';
+  const message = access.code === 'subscription_inactive'
+    ? 'Subscription inactive.'
+    : `This feature requires the ${requiredTier} plan.`;
+  return res.status(402).json({
+    error: message,
+    code: access.code || 'plan_upgrade_required',
+    feature: featureKey,
+    required_tier: requiredTier,
+    current_tier: access.currentTier || snapshot.tier,
+    subscription_status: access.status || snapshot.status,
+    billing: buildBillingResponsePayload(snapshot)
+  });
+}
+
+async function resolveDashboardBillingContext(req, res) {
+  const supabase = getSupabaseOr503(res);
+  if (!supabase) return null;
+  const customer = await getContextCustomer(supabase, req);
+  const snapshot = getBillingSnapshot({
+    tier: customer?.tier,
+    status: customer?.status
+  });
+  return { supabase, customer, snapshot };
+}
+
+function requireDashboardFeature(featureKey) {
+  return async (req, res, next) => {
+    try {
+      const context = await resolveDashboardBillingContext(req, res);
+      if (!context) return;
+      const access = evaluateFeatureAccess(
+        { tier: context.snapshot.tier, status: context.snapshot.status },
+        featureKey
+      );
+      if (!access.allowed) {
+        return sendBillingAccessError(res, featureKey, access, context.snapshot);
+      }
+      req.dashboardBilling = context;
+      req.dashboardFeature = featureKey;
+      return next();
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  };
 }
 
 // AUTH - Login
@@ -409,8 +471,28 @@ router.get('/tenant-context', async (req, res) => {
   }
 });
 
+router.get('/dashboard/plan', verifyToken, async (req, res) => {
+  try {
+    const context = await resolveDashboardBillingContext(req, res);
+    if (!context) return;
+    res.json({
+      customer: context.customer
+        ? {
+            id: context.customer.id,
+            business_name: context.customer.business_name || null,
+            status: context.customer.status || null,
+            tier: context.customer.tier || null
+          }
+        : null,
+      billing: buildBillingResponsePayload(context.snapshot)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DASHBOARD - Appointments
-router.get('/dashboard/appointments', verifyToken, async (req, res) => {
+router.get('/dashboard/appointments', verifyToken, requireDashboardFeature('dashboard.appointments'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -435,7 +517,7 @@ router.get('/dashboard/appointments', verifyToken, async (req, res) => {
   }
 });
 
-router.patch('/dashboard/appointments/:id', verifyToken, async (req, res) => {
+router.patch('/dashboard/appointments/:id', verifyToken, requireDashboardFeature('dashboard.appointments'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -448,7 +530,7 @@ router.patch('/dashboard/appointments/:id', verifyToken, async (req, res) => {
 });
 
 // DASHBOARD - Clients
-router.get('/dashboard/clients', verifyToken, async (req, res) => {
+router.get('/dashboard/clients', verifyToken, requireDashboardFeature('dashboard.clients'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -463,7 +545,7 @@ router.get('/dashboard/clients', verifyToken, async (req, res) => {
   }
 });
 
-router.get('/dashboard/clients/:id', verifyToken, async (req, res) => {
+router.get('/dashboard/clients/:id', verifyToken, requireDashboardFeature('dashboard.clients'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -478,7 +560,7 @@ router.get('/dashboard/clients/:id', verifyToken, async (req, res) => {
 });
 
 // DASHBOARD - Staff
-router.get('/dashboard/staff', verifyToken, async (req, res) => {
+router.get('/dashboard/staff', verifyToken, requireDashboardFeature('dashboard.staff'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -490,7 +572,7 @@ router.get('/dashboard/staff', verifyToken, async (req, res) => {
   }
 });
 
-router.post('/dashboard/staff', verifyToken, async (req, res) => {
+router.post('/dashboard/staff', verifyToken, requireDashboardFeature('dashboard.staff'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -503,7 +585,7 @@ router.post('/dashboard/staff', verifyToken, async (req, res) => {
 });
 
 // DASHBOARD - Services
-router.get('/dashboard/services', verifyToken, async (req, res) => {
+router.get('/dashboard/services', verifyToken, requireDashboardFeature('dashboard.services'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -514,7 +596,7 @@ router.get('/dashboard/services', verifyToken, async (req, res) => {
   }
 });
 
-router.post('/dashboard/services', verifyToken, async (req, res) => {
+router.post('/dashboard/services', verifyToken, requireDashboardFeature('dashboard.services'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -541,7 +623,7 @@ router.post('/dashboard/services', verifyToken, async (req, res) => {
   }
 });
 
-router.patch('/dashboard/services/:id', verifyToken, async (req, res) => {
+router.patch('/dashboard/services/:id', verifyToken, requireDashboardFeature('dashboard.services'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -559,7 +641,7 @@ router.patch('/dashboard/services/:id', verifyToken, async (req, res) => {
   }
 });
 
-router.delete('/dashboard/services/:id', verifyToken, async (req, res) => {
+router.delete('/dashboard/services/:id', verifyToken, requireDashboardFeature('dashboard.services'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -570,7 +652,7 @@ router.delete('/dashboard/services/:id', verifyToken, async (req, res) => {
   }
 });
 
-router.get('/dashboard/settings', verifyToken, async (req, res) => {
+router.get('/dashboard/settings', verifyToken, requireDashboardFeature('dashboard.settings'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -590,7 +672,7 @@ router.get('/dashboard/settings', verifyToken, async (req, res) => {
   }
 });
 
-router.patch('/dashboard/settings', verifyToken, async (req, res) => {
+router.patch('/dashboard/settings', verifyToken, requireDashboardFeature('dashboard.settings'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -616,7 +698,7 @@ router.patch('/dashboard/settings', verifyToken, async (req, res) => {
         .from('customers')
         .update(customerPatch)
         .eq('id', contextCustomer.id)
-        .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+        .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status, tier')
         .single();
       if (customerUpdate.error) throw customerUpdate.error;
       updatedCustomer = customerUpdate.data;
@@ -649,7 +731,7 @@ router.patch('/dashboard/settings', verifyToken, async (req, res) => {
   }
 });
 
-router.get('/dashboard/legal-content', verifyToken, async (req, res) => {
+router.get('/dashboard/legal-content', verifyToken, requireDashboardFeature('dashboard.legal'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -670,7 +752,7 @@ router.get('/dashboard/legal-content', verifyToken, async (req, res) => {
   }
 });
 
-router.patch('/dashboard/legal-content/:pageKey', verifyToken, async (req, res) => {
+router.patch('/dashboard/legal-content/:pageKey', verifyToken, requireDashboardFeature('dashboard.legal'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -689,7 +771,7 @@ router.patch('/dashboard/legal-content/:pageKey', verifyToken, async (req, res) 
   }
 });
 
-router.post('/dashboard/legal-content/:pageKey/restore', verifyToken, async (req, res) => {
+router.post('/dashboard/legal-content/:pageKey/restore', verifyToken, requireDashboardFeature('dashboard.legal'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;
@@ -717,7 +799,7 @@ router.post('/dashboard/legal-content/:pageKey/restore', verifyToken, async (req
 });
 
 // DASHBOARD - Revenue
-router.get('/dashboard/revenue', verifyToken, async (req, res) => {
+router.get('/dashboard/revenue', verifyToken, requireDashboardFeature('dashboard.revenue'), async (req, res) => {
   try {
     const supabase = getSupabaseOr503(res);
     if (!supabase) return;

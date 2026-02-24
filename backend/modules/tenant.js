@@ -104,7 +104,7 @@ async function resolveTenantForRequest(supabase, req) {
   try {
     const lookup = await supabase
       .from('customers')
-      .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status')
+      .select('id, business_name, business_type, owner_name, owner_email, subdomain, container_url, app_status, status, tier')
       .eq('subdomain', subdomain)
       .eq('status', 'active')
       .maybeSingle();

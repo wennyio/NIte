@@ -2,7 +2,7 @@ async function getLatestLiveCustomer(supabase) {
   try {
     const { data, error } = await supabase
       .from('customers')
-      .select('id, business_name, subdomain, app_status')
+      .select('id, business_name, subdomain, app_status, tier, status')
       .eq('app_status', 'live')
       .order('created_at', { ascending: false })
       .limit(1)

@@ -5,9 +5,10 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { parseGeneratedOutput } = require('../generator/parser');
 const { getSupabaseClient } = require('../modules/supabase');
-const { getLiveAppFiles } = require('../modules/live-app');
+const { getLiveAppFiles, getLatestLiveCustomer } = require('../modules/live-app');
 const { upsertCatalogItemByName, deactivateCatalogItemByName } = require('../modules/catalog');
 const { restoreCompiledFilesToDisk } = require('../modules/restore-generated');
+const { FEATURE_MIN_TIER, getBillingSnapshot, evaluateFeatureAccess } = require('../modules/billing');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -328,6 +329,54 @@ async function getCurrentFiles(supabase) {
     liveCustomer: fallbackLiveCustomer
   };
 }
+
+async function resolveAgentCustomer(req, supabase) {
+  if (req.tenant?.id) return req.tenant;
+  return getLatestLiveCustomer(supabase);
+}
+
+function sendAgentBillingError(res, access, snapshot) {
+  const requiredTier = access.requiredTier || FEATURE_MIN_TIER['dashboard.agent'] || 'pro';
+  const message = access.code === 'subscription_inactive'
+    ? 'Subscription inactive.'
+    : `This feature requires the ${requiredTier} plan.`;
+  return res.status(402).json({
+    error: message,
+    code: access.code || 'plan_upgrade_required',
+    feature: 'dashboard.agent',
+    required_tier: requiredTier,
+    current_tier: access.currentTier || snapshot.tier,
+    subscription_status: access.status || snapshot.status,
+    billing: {
+      tier: snapshot.tier,
+      status: snapshot.status,
+      features: snapshot.features,
+      requirements: FEATURE_MIN_TIER
+    }
+  });
+}
+
+router.use(async (req, res, next) => {
+  try {
+    const supabase = getSupabaseOrThrow();
+    const customer = await resolveAgentCustomer(req, supabase);
+    const snapshot = getBillingSnapshot({
+      tier: customer?.tier,
+      status: customer?.status
+    });
+    const access = evaluateFeatureAccess(
+      { tier: snapshot.tier, status: snapshot.status },
+      'dashboard.agent'
+    );
+    if (!access.allowed) {
+      return sendAgentBillingError(res, access, snapshot);
+    }
+    req.agentBilling = { customer, snapshot };
+    return next();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 // Upload image to Supabase Storage
 router.post('/upload', upload.single('image'), async (req, res) => {

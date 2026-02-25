@@ -168,23 +168,35 @@ function AgentWidget() {
     }
   };
 
+  const getBuildStatusSignal = async () => {
+    try {
+      const response = await axios.get('/admin/build-status', { timeout: 10000 });
+      return String(response?.data?.status || '').trim().toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+
   const waitForBuildCompletion = async (baselineSignature, maxWaitMs = AGENT_POLL_TIMEOUT_MS) => {
     const startedAt = Date.now();
     let lastSeenSignature = baselineSignature || '';
     while (Date.now() - startedAt < maxWaitMs) {
       await new Promise((resolve) => setTimeout(resolve, AGENT_POLL_INTERVAL_MS));
+      const status = await getBuildStatusSignal();
+      if (status === 'error') return 'failed';
+      if (status === 'complete' || status === 'live') return 'completed';
       const signature = await getBuildSignature();
       if (signature && baselineSignature && signature !== baselineSignature) {
-        return true;
+        return 'completed';
       }
       if (signature && !baselineSignature) {
         if (lastSeenSignature && signature !== lastSeenSignature) {
-          return true;
+          return 'completed';
         }
         lastSeenSignature = signature;
       }
     }
-    return false;
+    return 'timeout';
   };
 
   const queueRefreshNotice = () => {
@@ -236,9 +248,11 @@ function AgentWidget() {
         if (remainingWaitMs <= 0) {
           setMessages(prev => [...prev, { from: 'agent', text: 'This update timed out after 15 minutes. Please try again.' }]);
         } else {
-          const completed = await waitForBuildCompletion(baselineSignature, remainingWaitMs);
-          if (completed) {
+          const pollOutcome = await waitForBuildCompletion(baselineSignature, remainingWaitMs);
+          if (pollOutcome === 'completed') {
             shouldRefresh = true;
+          } else if (pollOutcome === 'failed') {
+            setMessages(prev => [...prev, { from: 'agent', text: 'Build failed while applying this change. Please try again.' }]);
           } else {
             setMessages(prev => [...prev, { from: 'agent', text: 'This update timed out after 15 minutes. Please try again.' }]);
           }

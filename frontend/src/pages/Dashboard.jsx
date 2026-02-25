@@ -116,13 +116,20 @@ function AgentWidget() {
     setHistory(newHistory);
     setImageUrl('');
     try {
-      const r = await axios.post('/api/agent/chat', { message: val, imageUrl: imageUrl || undefined, conversationHistory: newHistory.slice(-10) });
+      const r = await axios.post(
+        '/api/agent/chat',
+        { message: val, imageUrl: imageUrl || undefined, conversationHistory: newHistory.slice(-10) },
+        { timeout: 65000 }
+      );
       const contextNote = r.data.liveBusiness ? `\n\n(Editing live site: ${r.data.liveBusiness})` : '';
       const agentMsg = { from: 'agent', text: `${r.data.reply}${contextNote}`, rebuilt: r.data.rebuilt, filesChanged: r.data.filesChanged };
       setMessages(prev => [...prev, agentMsg]);
       setHistory(prev => [...prev, { role: 'assistant', content: r.data.reply }]);
     } catch (err) {
-      const message = err?.response?.data?.error || 'Something went wrong. Please try again.';
+      const timedOut = err?.code === 'ECONNABORTED' || err?.response?.status === 504 || err?.response?.data?.code === 'request_timeout';
+      const message = timedOut
+        ? 'This update is taking longer than expected. Please try again in a moment.'
+        : (err?.response?.data?.error || 'Something went wrong. Please try again.');
       setMessages(prev => [...prev, { from: 'agent', text: message }]);
     }
     setThinking(false);

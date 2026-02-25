@@ -29,6 +29,14 @@ const LOCKED_FILES = [
   'Dockerfile'
 ];
 
+function parsePositiveInteger(rawValue, fallback) {
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const CLAUDE_REQUEST_TIMEOUT_MS = parsePositiveInteger(process.env.CLAUDE_REQUEST_TIMEOUT_MS, 55000);
+const AGENT_BUILD_TIMEOUT_MS = parsePositiveInteger(process.env.AGENT_BUILD_TIMEOUT_MS, 120000);
+
 function getSupabaseOrThrow() {
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error('Supabase is not configured');
@@ -144,6 +152,26 @@ function extractChangedPathsFromGeneratedFiles(files) {
     paths.push(filePath);
   }
   return paths;
+}
+
+function createAbortTimer(timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    cancel: () => clearTimeout(timer)
+  };
+}
+
+function isTimeoutError(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return (
+    err?.name === 'AbortError' ||
+    message.includes('timeout') ||
+    message.includes('timed out') ||
+    message.includes('etimedout') ||
+    message.includes('aborted')
+  );
 }
 
 function buildCustomerScopedQuery(query, customerId) {
@@ -624,20 +652,34 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       { role: 'user', content: userMessage }
     ];
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 16000,
-        system: systemPrompt,
-        messages
-      })
-    });
+    const claudeRequest = createAbortTimer(CLAUDE_REQUEST_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 16000,
+          system: systemPrompt,
+          messages
+        }),
+        signal: claudeRequest.signal
+      });
+    } catch (fetchErr) {
+      if (isTimeoutError(fetchErr)) {
+        const timeoutError = new Error('Claude request timed out');
+        timeoutError.code = 'request_timeout';
+        throw timeoutError;
+      }
+      throw fetchErr;
+    } finally {
+      claudeRequest.cancel();
+    }
 
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
@@ -674,7 +716,11 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
       }
 
       // Rebuild frontend
-      execSync('npm run build --prefix frontend -- --outDir dist', { cwd: BASE_DIR, stdio: 'inherit' });
+      execSync('npm run build --prefix frontend -- --outDir dist', {
+        cwd: BASE_DIR,
+        stdio: 'inherit',
+        timeout: AGENT_BUILD_TIMEOUT_MS
+      });
 
       // Persist updates for the active live app context
       const distDir = path.join(BASE_DIR, 'frontend/dist');
@@ -736,6 +782,13 @@ ${currentFiles.map(f => `\n--- ${f.path} ---\n${f.content}`).join('\n')}`;
 
   } catch (err) {
     console.error('Agent error:', err.message);
+    const timedOut = err?.code === 'request_timeout' || isTimeoutError(err);
+    if (timedOut) {
+      return res.status(504).json({
+        error: 'This request took too long. Please try again.',
+        code: 'request_timeout'
+      });
+    }
     res.status(500).json({ error: err.message });
   }
 });

@@ -91,6 +91,11 @@ const TIER_LABELS = {
   pro: 'Pro'
 };
 
+const AGENT_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+const AGENT_POLL_TIMEOUT_MS = 15 * 60 * 1000;
+const AGENT_POLL_INTERVAL_MS = 7000;
+const AGENT_PROGRESS_INTERVAL_MS = 3000;
+
 function AgentWidget() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([{ from: 'agent', text: "Hi! I'm your site assistant. Ask me to change anything on your site — text, colors, images, services." }]);
@@ -100,10 +105,105 @@ function AgentWidget() {
   const [thinking, setThinking] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [history, setHistory] = useState([]);
+  const [progressNote, setProgressNote] = useState('');
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
+  const progressTimerRef = useRef(null);
+  const progressStartRef = useRef(0);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, open]);
+  useEffect(() => () => {
+    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
+  }, []);
+
+  const normalizeChangedFiles = (value) => (
+    Array.isArray(value)
+      ? value.map((entry) => String(entry || '').trim()).filter(Boolean)
+      : []
+  );
+
+  const getProgressStage = (elapsedMs) => {
+    if (elapsedMs < 20000) return 'Building your changes...';
+    if (elapsedMs < 60000) return 'Applying updates to your site...';
+    if (elapsedMs < 180000) return 'Rebuilding your preview...';
+    if (elapsedMs < 600000) return 'Almost done — finalizing everything...';
+    return 'Still processing. Thanks for your patience...';
+  };
+
+  const startProgressTicker = () => {
+    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
+    progressStartRef.current = Date.now();
+    setProgressNote(getProgressStage(0));
+    progressTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - progressStartRef.current;
+      setProgressNote(getProgressStage(elapsed));
+    }, AGENT_PROGRESS_INTERVAL_MS);
+  };
+
+  const stopProgressTicker = () => {
+    if (progressTimerRef.current) {
+      clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+    setProgressNote('');
+  };
+
+  const getBuildSignature = async () => {
+    try {
+      const response = await fetch(`/?agentProbe=${Date.now()}`, { cache: 'no-store' });
+      if (!response.ok) return null;
+      const html = await response.text();
+      const assetRefs = [];
+      const assetRegex = /(?:src|href)="([^"]*assets\/[^"]+)"/g;
+      let match;
+      while ((match = assetRegex.exec(html)) !== null) {
+        assetRefs.push(match[1]);
+      }
+      if (assetRefs.length > 0) {
+        return assetRefs.sort().join('|');
+      }
+      return `html:${html.length}`;
+    } catch {
+      return null;
+    }
+  };
+
+  const getBuildStatusSignal = async () => {
+    try {
+      const response = await axios.get('/admin/build-status', { timeout: 10000 });
+      return String(response?.data?.status || '').trim().toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+
+  const waitForBuildCompletion = async (baselineSignature, maxWaitMs = AGENT_POLL_TIMEOUT_MS) => {
+    const startedAt = Date.now();
+    let lastSeenSignature = baselineSignature || '';
+    while (Date.now() - startedAt < maxWaitMs) {
+      await new Promise((resolve) => setTimeout(resolve, AGENT_POLL_INTERVAL_MS));
+      const status = await getBuildStatusSignal();
+      if (status === 'error') return 'failed';
+      if (status === 'complete' || status === 'live') return 'completed';
+      const signature = await getBuildSignature();
+      if (signature && baselineSignature && signature !== baselineSignature) {
+        return 'completed';
+      }
+      if (signature && !baselineSignature) {
+        if (lastSeenSignature && signature !== lastSeenSignature) {
+          return 'completed';
+        }
+        lastSeenSignature = signature;
+      }
+    }
+    return 'timeout';
+  };
+
+  const queueRefreshNotice = () => {
+    setMessages(prev => [...prev, { from: 'agent', text: 'Changes applied! Refreshing page...' }]);
+    setProgressNote('Refreshing preview...');
+    setTimeout(() => window.location.reload(), 1200);
+  };
 
   const sendMessage = async () => {
     const val = input.trim();
@@ -115,24 +215,57 @@ function AgentWidget() {
     const newHistory = [...history, { role: 'user', content: val + (imageUrl ? `\n\nImage URL: ${imageUrl}` : '') }];
     setHistory(newHistory);
     setImageUrl('');
+    startProgressTicker();
+    const baselineSignature = await getBuildSignature();
+    let shouldRefresh = false;
     try {
       const r = await axios.post(
         '/api/agent/chat',
         { message: val, imageUrl: imageUrl || undefined, conversationHistory: newHistory.slice(-10) },
-        { timeout: 65000 }
+        { timeout: AGENT_REQUEST_TIMEOUT_MS }
       );
       const contextNote = r.data.liveBusiness ? `\n\n(Editing live site: ${r.data.liveBusiness})` : '';
-      const agentMsg = { from: 'agent', text: `${r.data.reply}${contextNote}`, rebuilt: r.data.rebuilt, filesChanged: r.data.filesChanged };
+      const filesChangedPaths = normalizeChangedFiles(r.data.filesChanged);
+      const filesChangedCount = filesChangedPaths.length;
+      const agentMsg = {
+        from: 'agent',
+        text: `${r.data.reply}${contextNote}`,
+        rebuilt: Boolean(r.data.rebuilt),
+        filesChangedCount,
+        filesChangedPaths
+      };
       setMessages(prev => [...prev, agentMsg]);
       setHistory(prev => [...prev, { role: 'assistant', content: r.data.reply }]);
+      if (agentMsg.rebuilt || filesChangedCount > 0) {
+        shouldRefresh = true;
+      }
     } catch (err) {
       const timedOut = err?.code === 'ECONNABORTED' || err?.response?.status === 504 || err?.response?.data?.code === 'request_timeout';
-      const message = timedOut
-        ? 'This update is taking longer than expected. Please try again in a moment.'
-        : (err?.response?.data?.error || 'Something went wrong. Please try again.');
-      setMessages(prev => [...prev, { from: 'agent', text: message }]);
+      if (timedOut) {
+        setMessages(prev => [...prev, { from: 'agent', text: 'Still working in the background. I’ll keep checking and refresh as soon as it lands.' }]);
+        const elapsed = Date.now() - progressStartRef.current;
+        const remainingWaitMs = Math.max(0, AGENT_POLL_TIMEOUT_MS - elapsed);
+        if (remainingWaitMs <= 0) {
+          setMessages(prev => [...prev, { from: 'agent', text: 'This update timed out after 15 minutes. Please try again.' }]);
+        } else {
+          const pollOutcome = await waitForBuildCompletion(baselineSignature, remainingWaitMs);
+          if (pollOutcome === 'completed') {
+            shouldRefresh = true;
+          } else if (pollOutcome === 'failed') {
+            setMessages(prev => [...prev, { from: 'agent', text: 'Build failed while applying this change. Please try again.' }]);
+          } else {
+            setMessages(prev => [...prev, { from: 'agent', text: 'This update timed out after 15 minutes. Please try again.' }]);
+          }
+        }
+      } else {
+        const message = err?.response?.data?.error || 'Something went wrong. Please try again.';
+        setMessages(prev => [...prev, { from: 'agent', text: message }]);
+      }
+    } finally {
+      stopProgressTicker();
+      setThinking(false);
     }
-    setThinking(false);
+    if (shouldRefresh) queueRefreshNotice();
   };
 
   const handleUpload = async (e) => {
@@ -164,7 +297,8 @@ function AgentWidget() {
           from: 'agent',
           text: `Restored your last saved version. Refresh the page to confirm the rollback.${contextNote}`,
           rebuilt: true,
-          filesChanged: r.data.filesRestored || 0
+          filesChangedCount: Number(r.data.filesRestored || 0),
+          filesChangedPaths: []
         }
       ]);
     } catch (err) {
@@ -190,11 +324,20 @@ function AgentWidget() {
               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.from === 'user' ? 'flex-end' : 'flex-start' }}>
                 <div style={{ maxWidth: '85%', padding: '10px 14px', borderRadius: msg.from === 'user' ? '12px 2px 12px 12px' : '2px 12px 12px 12px', background: msg.from === 'user' ? '#1a1a0e' : '#161614', border: `1px solid ${msg.from === 'user' ? '#2a2a18' : '#1e1e1a'}`, fontSize: '14px', lineHeight: '1.5', color: msg.from === 'user' ? '#c9a96e' : '#e8e0d4' }}>
                   {msg.text}
-                  {msg.rebuilt && <div style={{ marginTop: '8px', fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#6ec9a9', letterSpacing: '1px' }}>✓ SITE UPDATED · {msg.filesChanged} file{msg.filesChanged !== 1 ? 's' : ''} changed</div>}
+                  {msg.rebuilt && (
+                    <div style={{ marginTop: '8px', fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#6ec9a9', letterSpacing: '1px' }}>
+                      ✓ SITE UPDATED · {(msg.filesChangedCount || 0)} file{(msg.filesChangedCount || 0) !== 1 ? 's' : ''} changed
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
             {thinking && <div style={{ padding: '10px 14px', borderRadius: '2px 12px 12px 12px', background: '#161614', border: '1px solid #1e1e1a', width: 'fit-content' }}><div style={{ display: 'flex', gap: '4px' }}>{[0, 1, 2].map(i => <div key={i} style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#c9a96e', opacity: 0.6 }} />)}</div></div>}
+            {thinking && progressNote && (
+              <div style={{ fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#888', letterSpacing: '1px' }}>
+                {progressNote}
+              </div>
+            )}
             {imageUrl && <div style={{ fontFamily: 'Montserrat,sans-serif', fontSize: '10px', color: '#6ec9a9' }}>✓ IMAGE READY · Tell me where to place it</div>}
             <div ref={bottomRef} />
           </div>
